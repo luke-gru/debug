@@ -17,7 +17,7 @@ module DEBUGGER__
   end
 
   class FrameInfo
-    HOME = ENV['HOME'] ? (ENV['HOME'] + '/') : nil
+    HOME = ENV['HOME'] ? (ENV['HOME'] + '/').freeze : nil
 
     def path
       location.path
@@ -29,7 +29,7 @@ module DEBUGGER__
 
     def self.pretty_path path
       return '#<none>' unless path
-      use_short_path = CONFIG[:use_short_path]
+      use_short_path = Config.config[:use_short_path]
 
       case
       when use_short_path && path.start_with?(dir = RbConfig::CONFIG["rubylibdir"] + '/')
@@ -65,7 +65,7 @@ module DEBUGGER__
     end
 
     def file_lines
-      SESSION.source(self.iseq)
+      Ractor.current[:DEBUGGER_SESSION].source(self.iseq)
     end
 
     def frame_type

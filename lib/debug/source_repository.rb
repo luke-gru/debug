@@ -22,7 +22,7 @@ module DEBUGGER__
       end
     end
 
-    if defined?(RubyVM.keep_script_lines)
+    if defined?(RubyVM.keep_script_lines) && !defined?(Ractor)
       # Ruby 3.1 and later
       RubyVM.keep_script_lines = true
       require 'objspace'

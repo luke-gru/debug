@@ -2,7 +2,7 @@
 module DEBUGGER__
   class Console
     begin
-      raise LoadError if CONFIG[:no_reline]
+      raise LoadError if Config.config[:no_reline]
       require 'reline'
 
       require_relative 'color'
@@ -77,7 +77,7 @@ module DEBUGGER__
           when :ruby
             colorize_code(buff)
           end
-        end unless CONFIG[:no_hint]
+        end unless Config.config[:no_hint]
 
         yield
 
@@ -103,7 +103,7 @@ module DEBUGGER__
       end
 
       def history
-        Reline::HISTORY
+        nil # TODO
       end
 
     rescue LoadError
@@ -137,7 +137,8 @@ module DEBUGGER__
         end
 
         def history
-          Readline::HISTORY
+          nil
+          #Readline::HISTORY TODO
         end
 
       rescue LoadError
@@ -153,7 +154,7 @@ module DEBUGGER__
     end
 
     def history_file
-      history_file = CONFIG[:history_file]
+      history_file = Config.config[:history_file]
 
       if !history_file.empty?
         File.expand_path(history_file)
@@ -187,7 +188,7 @@ module DEBUGGER__
       if history && @init_history_lines
         added_records = history.to_a[@init_history_lines .. -1]
         path = history_file
-        max = CONFIG[:save_history]
+        max = Config.config[:save_history]
 
         if !added_records.empty? && !path.empty?
           orig_records = read_history_file

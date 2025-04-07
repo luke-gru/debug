@@ -15,22 +15,26 @@ module DEBUGGER__
 
     def activate_sigint
       prev_handler = trap(:SIGINT){
-        if SESSION.active?
+        if session.active?
           ThreadClient.current.on_trap :SIGINT
         end
       }
-      SESSION.intercept_trap_sigint_start prev_handler
+      session.intercept_trap_sigint_start prev_handler
+    end
+
+    def session
+      Ractor.current[:DEBUGGER_SESSION]
     end
 
     def deactivate_sigint
-      if SESSION.intercept_trap_sigint?
-        prev = SESSION.intercept_trap_sigint_end
+      if session.intercept_trap_sigint?
+        prev = session.intercept_trap_sigint_end
         trap(:SIGINT, prev)
       end
     end
 
     def activate session, on_fork: false
-      activate_sigint unless CONFIG[:no_sigint_hook]
+      activate_sigint unless Config.config[:no_sigint_hook]
     end
 
     def deactivate
@@ -80,7 +84,7 @@ module DEBUGGER__
     end
 
     def setup_interrupt
-      SESSION.intercept_trap_sigint false do
+      session.intercept_trap_sigint false do
         current_thread = Thread.current # should be session_server thread
 
         prev_handler = trap(:INT){
@@ -97,7 +101,7 @@ module DEBUGGER__
       parent_pid = Process.pid
 
       at_exit{
-        SESSION.intercept_trap_sigint_end
+        session.intercept_trap_sigint_end
         trap(:SIGINT, :IGNORE)
 
         if Process.pid == parent_pid

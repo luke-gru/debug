@@ -10,7 +10,7 @@ module DEBUGGER__
     DEBUG:   5
   }.freeze
 
-  CONFIG_SET = {
+  CONFIG_SET = Ractor.make_shareable({
     # UI setting
     log_level:      ['RUBY_DEBUG_LOG_LEVEL',      "UI: Log level same as Logger",               :loglevel, "WARN"],
     show_src_lines: ['RUBY_DEBUG_SHOW_SRC_LINES', "UI: Show n lines source code on breakpoint", :int, "10"],
@@ -56,41 +56,46 @@ module DEBUGGER__
 
     # obsolete
     parent_on_fork: ['RUBY_DEBUG_PARENT_ON_FORK', "OBSOLETE: Keep debugging parent process on fork",     :bool, "false"],
-  }.freeze
+  })
 
-  CONFIG_MAP = CONFIG_SET.map{|k, (ev, _)| [k, ev]}.to_h.freeze
+  CONFIG_MAP = Ractor.make_shareable(CONFIG_SET.map{|k, (ev, _)| [k, ev]}.to_h)
 
   class Config
-    @config = nil
-
     def self.config
-      @config
+      Ractor.current[:DEBUGGER_CONFIG]
+    end
+
+    def self.config=(config)
+      Ractor.current[:DEBUGGER_CONFIG] = config
     end
 
     def initialize argv
+      $stderr.puts "Initing config"
       if self.class.config
-        raise 'Can not make multiple configurations in one process'
+        raise 'Can not make multiple configurations in one ractor'
       end
 
-      config = self.class.parse_argv(argv)
+      _config = self.class.parse_argv(argv)
 
       # apply defaults
       CONFIG_SET.each do |k, config_detail|
-        unless config.key?(k)
+        unless _config.key?(k)
           default_value = config_detail[3]
-          config[k] = parse_config_value(k, default_value)
+          _config[k] = parse_config_value(k, default_value)
         end
       end
 
-      update config
+      @config = {}
+      $stderr.puts "Updating config: #{_config} (#{_config.class})"
+      update _config
     end
 
     def inspect
-      config.inspect
+      @config.inspect
     end
 
     def [](key)
-      config[key]
+      @config[key]
     end
 
     def []=(key, val)
@@ -98,7 +103,7 @@ module DEBUGGER__
     end
 
     def set_config(**kw)
-      conf = config.dup
+      conf = @config.dup
       kw.each{|k, v|
         if CONFIG_MAP[k]
           conf[k] = parse_config_value(k, v) # TODO: ractor support
@@ -127,10 +132,11 @@ module DEBUGGER__
     end
 
     def update conf
-      old_conf = self.class.instance_variable_get(:@config) || {}
+      old_conf = @config
 
-      # TODO: Use Ractor.make_shareable(conf)
-      self.class.instance_variable_set(:@config, conf.freeze)
+      @config = conf
+      self.class.config = @config
+      session = Ractor.current[:DEBUGGER_SESSION]
 
       # Post process
       if_updated old_conf, conf, :keep_alloc_site do |old, new|
@@ -145,8 +151,8 @@ module DEBUGGER__
       end
 
       if_updated old_conf, conf, :postmortem do |_, new_p|
-        if defined?(SESSION)
-          SESSION.postmortem = new_p
+        if session
+          session.postmortem = new_p
         end
       end
 
@@ -155,22 +161,22 @@ module DEBUGGER__
       end
 
       if_updated old_conf, conf, :no_sigint_hook do |old, new|
-        if defined?(SESSION)
-          SESSION.set_no_sigint_hook old, new
+        if session
+          session.set_no_sigint_hook old, new
         end
       end
 
       if_updated old_conf, conf, :irb_console do |old, new|
-        if defined?(SESSION) && SESSION.active?
+        if session&.active?
           # irb_console is switched from true to false
           if old
-            SESSION.deactivate_irb_integration
+            session.deactivate_irb_integration
           # irb_console is switched from false to true
           else
-            if CONFIG[:open]
-              SESSION.instance_variable_get(:@ui).puts "\nIRB is not supported on the remote console."
+            if Config.config[:open]
+              session.ui.puts "\nIRB is not supported on the remote console."
             else
-              SESSION.activate_irb_integration
+              session.activate_irb_integration
             end
           end
         end
@@ -266,6 +272,7 @@ module DEBUGGER__
     end
 
     def self.parse_argv argv
+      $stderr.puts "parse_argv in #{Ractor.current}"
       config = {
         mode: :start,
         no_color: (nc = ENV['NO_COLOR']) && !nc.empty?,
@@ -287,46 +294,46 @@ module DEBUGGER__
 
       have_shown_version = false
 
-      opt = OptionParser.new do |o|
+      opt = OptionParser.new &Ractor.instance_eval { Proc.new do |o|
         o.banner = "#{$0} [options] -- [debuggee options]"
         o.separator ''
         o.version = ::DEBUGGER__::VERSION
 
         o.separator 'Debug console mode:'
-        o.on('-n', '--nonstop', 'Do not stop at the beginning of the script.') do
+        o.on '-n', '--nonstop', 'Do not stop at the beginning of the script.', &Ractor.instance_eval { Proc.new do
           config[:nonstop] = '1'
-        end
+        end }
 
-        o.on('-e DEBUG_COMMAND', 'Execute debug command at the beginning of the script.') do |cmd|
+        o.on '-e DEBUG_COMMAND', 'Execute debug command at the beginning of the script.', &Ractor.instance_eval { Proc.new do |cmd|
           config[:commands] ||= ''
           config[:commands] += cmd + ';;'
-        end
+        end }
 
-        o.on('-x FILE', '--init-script=FILE', 'Execute debug command in the FILE.') do |file|
+        o.on '-x FILE', '--init-script=FILE', 'Execute debug command in the FILE.', &Ractor.instance_eval { Proc.new do |file|
           config[:init_script] = file
-        end
-        o.on('--no-rc', 'Ignore ~/.rdbgrc') do
+        end }
+        o.on '--no-rc', 'Ignore ~/.rdbgrc', &Ractor.instance_eval { Proc.new do
           config[:no_rc] = true
-        end
-        o.on('--no-color', 'Disable colorize') do
+        end }
+        o.on '--no-color', 'Disable colorize', &Ractor.instance_eval { Proc.new do
           config[:no_color] = true
-        end
-        o.on('--no-sigint-hook', 'Disable to trap SIGINT') do
+        end }
+        o.on '--no-sigint-hook', 'Disable to trap SIGINT', &Ractor.instance_eval { Proc.new do
           config[:no_sigint_hook] = true
-        end
+        end }
 
-        o.on('-c', '--command', 'Enable command mode.',
+        o.on '-c', '--command', 'Enable command mode.',
                                 'The first argument should be a command name in $PATH.',
-                                'Example: \'rdbg -c bundle exec rake test\'') do
+                                'Example: \'rdbg -c bundle exec rake test\'', &Ractor.instance_eval { Proc.new do
           config[:command] = true
-        end
+        end }
 
         o.separator ''
 
-        o.on('-O', '--open=[FRONTEND]', 'Start remote debugging with opening the network port.',
+        o.on '-O', '--open=[FRONTEND]', 'Start remote debugging with opening the network port.',
                                         'If TCP/IP options are not given, a UNIX domain socket will be used.',
                                         'If FRONTEND is given, prepare for the FRONTEND.',
-                                        'Now rdbg, vscode and chrome is supported.') do |f|
+          'Now rdbg, vscode and chrome is supported.', &Ractor.instance_eval { Proc.new do |f|
 
           case f # some format patterns are not documented yet
           when nil
@@ -346,25 +353,25 @@ module DEBUGGER__
           else
             raise "Unknown option for --open: #{f}"
           end
-        end
-        o.on('--sock-path=SOCK_PATH', 'UNIX Domain socket path') do |path|
+        end }
+        o.on '--sock-path=SOCK_PATH', 'UNIX Domain socket path', &Ractor.instance_eval { Proc.new do |path|
           config[:sock_path] = path
-        end
-        o.on('--port=PORT', 'Listening TCP/IP port') do |port|
+        end }
+        o.on '--port=PORT', 'Listening TCP/IP port', &Ractor.instance_eval { Proc.new do |port|
           config[:port] = port
-        end
-        o.on('--port-range=PORT_RANGE', 'Number of ports to try to connect to') do |port_range|
+        end }
+        o.on '--port-range=PORT_RANGE', 'Number of ports to try to connect to', &Ractor.instance_eval { Proc.new do |port_range|
           config[:port_range] = port_range
-        end
-        o.on('--host=HOST', 'Listening TCP/IP host') do |host|
+        end }
+        o.on '--host=HOST', 'Listening TCP/IP host', &Ractor.instance_eval { Proc.new do |host|
           config[:host] = host
-        end
-        o.on('--cookie=COOKIE', 'Set a cookie for connection') do |c|
+        end }
+        o.on '--cookie=COOKIE', 'Set a cookie for connection', &Ractor.instance_eval { Proc.new do |c|
           config[:cookie] = c
-        end
-        o.on('--session-name=NAME', 'Session name') do |name|
+        end }
+        o.on '--session-name=NAME', 'Session name', &Ractor.instance_eval { Proc.new do |name|
           config[:session_name] = name
-        end
+        end }
 
         rdbg = 'rdbg'
 
@@ -383,9 +390,9 @@ module DEBUGGER__
 
         o.separator ''
         o.separator 'Attach mode:'
-        o.on('-A', '--attach', 'Attach to debuggee process.') do
+        o.on '-A', '--attach', 'Attach to debuggee process.', &Ractor.instance_eval { Proc.new do
           config[:mode] = :attach
-        end
+        end }
 
         o.separator ''
         o.separator '  Attach mode attaches the remote debug console to the debuggee process.'
@@ -400,36 +407,36 @@ module DEBUGGER__
         o.separator ''
         o.separator 'Other options:'
 
-        o.on('-v', 'Show version number') do
+        o.on '-v', 'Show version number', &Ractor.instance_eval { Proc.new do
           puts o.ver
           have_shown_version = true
-        end
+        end }
 
-        o.on('--version', 'Show version number and exit') do
+        o.on '--version', 'Show version number and exit', &Ractor.instance_eval { Proc.new do
           puts o.ver
           exit
-        end
+        end }
 
-        o.on("-h", "--help", "Print help") do
+        o.on "-h", "--help", "Print help", &Ractor.instance_eval { Proc.new do
           puts o
           exit
-        end
+        end }
 
-        o.on('--util=NAME', 'Utility mode (used by tools)') do |name|
+        o.on '--util=NAME', 'Utility mode (used by tools)', &Ractor.instance_eval { Proc.new do |name|
           require_relative 'client'
           Client.util(name)
           exit
-        end
+        end }
 
-        o.on('--stop-at-load', 'Stop immediately when the debugging feature is loaded.') do
+        o.on '--stop-at-load', 'Stop immediately when the debugging feature is loaded.', &Ractor.instance_eval { Proc.new do
           config[:stop_at_load] = true
-        end
+        end }
 
         o.separator ''
         o.separator 'NOTE'
         o.separator '  All messages communicated between a debugger and a debuggee are *NOT* encrypted.'
         o.separator '  Please use the remote debugging feature carefully.'
-      end
+      end }
 
       opt.parse!(argv)
 
@@ -440,6 +447,7 @@ module DEBUGGER__
         end
       end
 
+      $stderr.puts "parse_argv in #{Ractor.current}"
       config
     end
 
@@ -460,7 +468,7 @@ module DEBUGGER__
     end
   end
 
-  CONFIG = Config.new ENV['RUBY_DEBUG_OPT']
+  Config.config = Config.new ENV['RUBY_DEBUG_OPT']
 
   ## Unix domain socket configuration
 
@@ -507,7 +515,7 @@ module DEBUGGER__
 
   def self.unix_domain_socket_dir
     case
-    when path = CONFIG[:sock_dir]
+    when path = Config.config[:sock_dir]
     when path = ENV['XDG_RUNTIME_DIR']
     when path = unix_domain_socket_tmpdir
     when path = unix_domain_socket_homedir
@@ -524,7 +532,7 @@ module DEBUGGER__
 
   def self.create_unix_domain_socket_name(base_dir = unix_domain_socket_dir)
     suffix = "-#{Process.pid}"
-    name = CONFIG[:session_name]
+    name = Config.config[:session_name]
     suffix << "-#{name}" if name
     create_unix_domain_socket_name_prefix(base_dir) + suffix
   end

@@ -63,7 +63,7 @@ module DEBUGGER__
         provider, pre_cmds, do_cmds = @command
         nonstop = true if do_cmds
         cmds = [*pre_cmds&.split(';;'), *do_cmds&.split(';;')]
-        SESSION.add_preset_commands provider, cmds, kick: false, continue: nonstop
+        Ractor.current[:DEBUGGER_SESSION].add_preset_commands provider, cmds, kick: false, continue: nonstop
       end
 
       ThreadClient.current.on_breakpoint @tp, self
@@ -192,7 +192,7 @@ module DEBUGGER__
       @path = iseq.absolute_path
 
       @key = [@path, @line].freeze
-      SESSION.rehash_bps
+      Ractor.current[:DEBUGGER_SESSION].rehash_bps
       setup
       enable
 
@@ -348,7 +348,7 @@ module DEBUGGER__
 
     def setup
       @tp = TracePoint.new(:line){|tp|
-        next if SESSION.in_subsession? # TODO: Ractor support
+        next if Ractor.current[:DEBUGGER_SESSION].in_subsession? # TODO: Ractor support
         next if ThreadClient.current.management?
         next if skip_path?(tp.path)
 

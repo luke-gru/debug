@@ -195,6 +195,7 @@ void Init_iseq_collector(void);
 void
 Init_debug(void)
 {
+    RB_EXT_RACTOR_SAFE(true);
 #ifdef HAVE_RB_ISEQ
     VALUE rb_mRubyVM = rb_const_get(rb_cObject, rb_intern("RubyVM"));
     VALUE rb_cISeq = rb_const_get(rb_mRubyVM, rb_intern("InstructionSequence"));

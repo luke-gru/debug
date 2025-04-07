@@ -142,7 +142,7 @@ module DEBUGGER__
       @tp_load_script.enable
 
       @thread_stopper = thread_stopper
-      self.postmortem = CONFIG[:postmortem]
+      self.postmortem = Config.config[:postmortem]
 
       register_default_command
     end
@@ -176,6 +176,13 @@ module DEBUGGER__
 
       q = Queue.new
       first_q = Queue.new
+      $stderr.puts "Activating #{self.class}"
+      if Ractor.main != Ractor.current
+        $stderr.puts "In Ractor"
+      end
+
+      outer_th = Thread.current
+
       @session_server = Thread.new do
         # make sure `@session_server` is assigned
         first_q.pop; first_q = nil
@@ -202,6 +209,10 @@ module DEBUGGER__
         end
         @tp_thread_end.enable
 
+        if Ractor.current != Ractor.main
+          create_thread_client(outer_th)
+        end
+
         # session start
         q << true
         session_server_main
@@ -212,7 +223,7 @@ module DEBUGGER__
 
       # For activating irb:rdbg with startup config like `RUBY_DEBUG_IRB_CONSOLE=1`
       # Because in that case the `Config#if_updated` callback would not be triggered
-      if CONFIG[:irb_console] && !CONFIG[:open]
+      if Config.config[:irb_console] && !Config.config[:open]
         activate_irb_integration
       end
     end
@@ -252,6 +263,7 @@ module DEBUGGER__
 
     def session_server_main
       while evt = pop_event
+        $stderr.puts "sess server: Processing event: #{evt}"
         process_event evt
       end
     ensure
@@ -389,7 +401,7 @@ module DEBUGGER__
     end
 
     def source iseq
-      if !CONFIG[:no_color]
+      if !Config.config[:no_color]
         @sr.get_colored(iseq)
       else
         @sr.get(iseq)
@@ -1116,13 +1128,13 @@ module DEBUGGER__
         when /\A(.+):(\d+)\z/
           ::DEBUGGER__.open_tcp host: $1, port: $2.to_i, nonstop: true
         when 'tcp'
-          ::DEBUGGER__.open_tcp host: CONFIG[:host], port: (CONFIG[:port] || 0), nonstop: true
+          ::DEBUGGER__.open_tcp host: Config.config[:host], port: (Config.config[:port] || 0), nonstop: true
         when 'vscode'
-          CONFIG[:open] = 'vscode'
+          Config.config[:open] = 'vscode'
           ::DEBUGGER__.open nonstop: true
         when 'chrome', 'cdp'
-          CONFIG[:open] = 'chrome'
-          ::DEBUGGER__.open_tcp host: CONFIG[:host], port: (CONFIG[:port] || 0), nonstop: true
+          Config.config[:open] = 'chrome'
+          ::DEBUGGER__.open_tcp host: Config.config[:host], port: (Config.config[:port] || 0), nonstop: true
         else
           raise "Unknown arg: #{arg}"
         end
@@ -1216,7 +1228,7 @@ module DEBUGGER__
       config_detail = CONFIG_SET[key]
 
       if config_detail
-        v = CONFIG[key]
+        v = Config.config[key]
         kv = "#{key} = #{v.inspect}"
         desc = config_detail[1]
 
@@ -1225,7 +1237,7 @@ module DEBUGGER__
         end
 
         line = "%-34s \# %s" % [kv, desc]
-        if line.size > SESSION.width
+        if line.size > Ractor.current[:DEBUGGER_SESSION].width
           @ui.puts "\# #{desc}\n#{kv}"
         else
           @ui.puts line
@@ -1239,9 +1251,9 @@ module DEBUGGER__
       if CONFIG_SET[key = key.to_sym]
         begin
           if append
-            CONFIG.append_config(key, val)
+            Config.config.append_config(key, val)
           else
-            CONFIG[key] = val
+            Config.config[key] = val
           end
         rescue => e
           @ui.puts e.message
@@ -1260,7 +1272,7 @@ module DEBUGGER__
 
       when /\Aunset\s+(.+)\z/
         if CONFIG_SET[key = $1.to_sym]
-          CONFIG[key] = nil
+          Config.config[key] = nil
         end
         config_show key
 
@@ -1634,7 +1646,7 @@ module DEBUGGER__
 
     private def create_thread_client th
       # TODO: Ractor support
-      raise "Only session_server can create thread_client" unless Thread.current == @session_server
+      #raise "Only session_server can create thread_client" unless Thread.current == @session_server
       @th_clients[th] = ThreadClient.new((@tc_id += 1), @q_evt, Queue.new, th)
     end
 
@@ -1685,11 +1697,13 @@ module DEBUGGER__
         next unless tc.running?
         next if tc == @tc
 
+        $stderr.puts "TC#on_pause"
         tc.on_pause
       end
     end
 
     private def stop_all_threads
+      $stderr.puts "stop_all_threads: #{running_thread_clients_count}"
       return if running_thread_clients_count == 0
 
       stopper = @thread_stopper
@@ -1697,6 +1711,7 @@ module DEBUGGER__
     end
 
     private def restart_all_threads
+      $stderr.puts "Restarting all"
       stopper = @thread_stopper
       stopper.disable if stopper.enabled?
 
@@ -1840,7 +1855,7 @@ module DEBUGGER__
     def self.create_method_added_tracker mod, method_added_id, method_accessor = :method
       m = mod.__send__(method_accessor, method_added_id)
       METHOD_ADDED_TRACKERS[m] = TracePoint.new(:call) do |tp|
-        SESSION.method_added tp
+        Ractor.current[:DEBUGGER_SESSION].method_added tp
       end
     end
 
@@ -1934,7 +1949,7 @@ module DEBUGGER__
           }
           at_exit{
             @postmortem_hook.disable
-            if CONFIG[:postmortem] && (exc = $!) != nil
+            if Config.config[:postmortem] && (exc = $!) != nil
               exc = exc.cause while exc.cause
 
               begin
@@ -2181,11 +2196,11 @@ module DEBUGGER__
   # manual configuration methods
 
   def self.add_line_breakpoint file, line, **kw
-    ::DEBUGGER__::SESSION.add_line_breakpoint file, line, **kw
+    Ractor.current[:DEBUGGER_SESSION].add_line_breakpoint file, line, **kw
   end
 
   def self.add_catch_breakpoint pat
-    ::DEBUGGER__::SESSION.add_catch_breakpoint pat
+    Ractor.current[:DEBUGGER_SESSION].add_catch_breakpoint pat
   end
 
   # String for requiring location
@@ -2209,24 +2224,25 @@ module DEBUGGER__
   # start methods
 
   def self.start nonstop: false, **kw
-    CONFIG.set_config(**kw)
+    Config.config ||= Config.new ENV['RUBY_DEBUG_OPT']
+    Config.config.set_config(**kw)
 
-    if CONFIG[:open]
+    if Config.config[:open]
       open nonstop: nonstop, **kw
     else
-      unless defined? SESSION
+      unless Ractor.current[:DEBUGGER_SESSION]
         require_relative 'local'
-        initialize_session{ UI_LocalConsole.new }
+        initialize_session { UI_LocalConsole.new }
       end
       setup_initial_suspend unless nonstop
     end
   end
 
-  def self.open host: nil, port: CONFIG[:port], sock_path: nil, sock_dir: nil, nonstop: false, **kw
-    CONFIG.set_config(**kw)
+  def self.open host: nil, port: Config.config[:port], sock_path: nil, sock_dir: nil, nonstop: false, **kw
+    Config.config.set_config(**kw)
     require_relative 'server'
 
-    if port || CONFIG[:open] == 'chrome' || (!::Addrinfo.respond_to?(:unix))
+    if port || Config.config[:open] == 'chrome' || (!::Addrinfo.respond_to?(:unix))
       open_tcp host: host, port: (port || 0), nonstop: nonstop
     else
       open_unix sock_path: sock_path, sock_dir: sock_dir, nonstop: nonstop
@@ -2234,11 +2250,12 @@ module DEBUGGER__
   end
 
   def self.open_tcp host: nil, port:, nonstop: false, **kw
-    CONFIG.set_config(**kw)
+    Config.config.set_config(**kw)
     require_relative 'server'
 
-    if defined? SESSION
-      SESSION.reset_ui UI_TcpServer.new(host: host, port: port)
+    session = Ractor.current[:DEBUGGER_SESSION]
+    if session
+      session.reset_ui UI_TcpServer.new(host: host, port: port)
     else
       initialize_session{ UI_TcpServer.new(host: host, port: port) }
     end
@@ -2247,11 +2264,12 @@ module DEBUGGER__
   end
 
   def self.open_unix sock_path: nil, sock_dir: nil, nonstop: false, **kw
-    CONFIG.set_config(**kw)
+    Config.config.set_config(**kw)
     require_relative 'server'
 
-    if defined? SESSION
-      SESSION.reset_ui UI_UnixDomainServer.new(sock_dir: sock_dir, sock_path: sock_path)
+    session = Ractor.current[:DEBUGGER_SESSION]
+    if session
+      session.reset_ui UI_UnixDomainServer.new(sock_dir: sock_dir, sock_path: sock_path)
     else
       initialize_session{ UI_UnixDomainServer.new(sock_dir: sock_dir, sock_path: sock_path) }
     end
@@ -2262,17 +2280,21 @@ module DEBUGGER__
   # boot utilities
 
   def self.setup_initial_suspend
-    if !CONFIG[:nonstop]
+    $stderr.puts "Setting up suspend"
+    if !Config.config[:nonstop]
       case
-      when CONFIG[:stop_at_load]
+      when Config.config[:stop_at_load]
+        $stderr.puts "Stop at load"
         add_line_breakpoint __FILE__, __LINE__ + 1, oneshot: true, hook_call: false
         nil # stop here
       when path = ENV['RUBY_DEBUG_INITIAL_SUSPEND_PATH']
         add_line_breakpoint path, 0, oneshot: true, hook_call: false
       when loc = ::DEBUGGER__.require_location
+        $stderr.puts "Stop at loc"
         # require 'debug/start' or 'debug'
         add_line_breakpoint loc.absolute_path, loc.lineno + 1, oneshot: true, hook_call: false
       else
+        $stderr.puts "oneshot"
         # -r
         add_line_breakpoint $0, 0, oneshot: true, hook_call: false
       end
@@ -2280,10 +2302,10 @@ module DEBUGGER__
   end
 
   class << self
-    define_method :initialize_session do |&init_ui|
+    def initialize_session(&init_ui)
       DEBUGGER__.info "Session start (pid: #{Process.pid})"
-      ::DEBUGGER__.const_set(:SESSION, Session.new)
-      SESSION.activate init_ui.call
+      session = Ractor.current[:DEBUGGER_SESSION] = Session.new
+      session.activate init_ui.call
       load_rc
     end
   end
@@ -2304,16 +2326,16 @@ module DEBUGGER__
     [[File.expand_path('~/.rdbgrc'), true],
      [File.expand_path('~/.rdbgrc.rb'), true],
      # ['./.rdbgrc', true], # disable because of security concern
-     [CONFIG[:init_script], false],
+      [Config.config[:init_script], false],
      ].each{|(path, rc)|
       next unless path
-      next if rc && CONFIG[:no_rc] # ignore rc
+      next if rc && Config.config[:no_rc] # ignore rc
 
       if File.file? path
         if path.end_with?('.rb')
           load path
         else
-          ::DEBUGGER__::SESSION.add_preset_commands path, File.readlines(path)
+          Ractor.current[:DEBUGGER_SESSION].add_preset_commands path, File.readlines(path)
         end
       elsif !rc
         warn "Not found: #{path}"
@@ -2321,9 +2343,9 @@ module DEBUGGER__
     }
 
     # given debug commands
-    if CONFIG[:commands]
-      cmds = CONFIG[:commands].split(';;')
-      ::DEBUGGER__::SESSION.add_preset_commands "commands", cmds, kick: false, continue: false
+    if Config.config[:commands]
+      cmds = Config.config[:commands].split(';;')
+      Ractor.current[:DEBUGGER_SESSION].add_preset_commands "commands", cmds, kick: false, continue: false
     end
   end
 
@@ -2386,7 +2408,7 @@ module DEBUGGER__
 
   def self.check_loglevel level
     lv = LOG_LEVELS[level]
-    config_lv = LOG_LEVELS[CONFIG[:log_level]]
+    config_lv = LOG_LEVELS[Config.config[:log_level]]
     lv <= config_lv
   end
 
@@ -2398,28 +2420,30 @@ module DEBUGGER__
 
   def self.log level, msg
     if check_loglevel level
-      @logfile = STDERR unless defined? @logfile
-      return if @logfile.closed?
+      logfile = $stderr
+      return if logfile.closed?
 
-      if defined? SESSION
-        pi = SESSION.process_info
+      session = Ractor.current[:DEBUGGER_SESSION]
+      if session
+        pi = session.process_info
         process_info = pi ? "[#{pi}]" : nil
       end
 
       if level == :WARN
         # :WARN on debugger is general information
-        @logfile.puts "DEBUGGER#{process_info}: #{msg}"
-        @logfile.flush
+        logfile.puts "DEBUGGER#{process_info}: #{msg}"
+        logfile.flush
       else
-        @logfile.puts "DEBUGGER#{process_info} (#{level}): #{msg}"
-        @logfile.flush
+        logfile.puts "DEBUGGER#{process_info} (#{level}): #{msg}"
+        logfile.flush
       end
     end
   end
 
   def self.step_in &b
-    if defined?(SESSION) && SESSION.active?
-      SESSION.add_iseq_breakpoint RubyVM::InstructionSequence.of(b), oneshot: true
+    session = Ractor.current[:DEBUGGER_SESSION]
+    if session&.active?
+      session.add_iseq_breakpoint RubyVM::InstructionSequence.of(b), oneshot: true
     end
 
     yield
@@ -2442,7 +2466,8 @@ module DEBUGGER__
   module ForkInterceptor
     if Process.respond_to? :_fork
       def _fork
-        return super unless defined?(SESSION) && SESSION.active?
+        session = Ractor.current[:DEBUGGER_SESSION]
+        return super unless session && session.active?
 
         parent_hook, child_hook = __fork_setup_for_debugger
 
@@ -2458,7 +2483,8 @@ module DEBUGGER__
       end
     else
       def fork(&given_block)
-        return super unless defined?(SESSION) && SESSION.active?
+        session = Ractor.current[:DEBUGGER_SESSION]
+        return super unless session && session.active?
         parent_hook, child_hook = __fork_setup_for_debugger
 
         if given_block
@@ -2484,11 +2510,12 @@ module DEBUGGER__
 
     module DaemonInterceptor
       def daemon(*args)
-        return super unless defined?(SESSION) && SESSION.active?
+        session = Ractor.current[:DEBUGGER_SESSION]
+        return super unless session && session.active?
 
         _, child_hook = __fork_setup_for_debugger(:child)
 
-        unless SESSION.remote?
+        unless session.remote?
           DEBUGGER__.warn "Can't debug the code after Process.daemon locally. Use the remote debugging feature."
         end
 
@@ -2499,13 +2526,14 @@ module DEBUGGER__
     end
 
     private def __fork_setup_for_debugger fork_mode = nil
-      fork_mode ||= CONFIG[:fork_mode]
+      fork_mode ||= Config.config[:fork_mode]
 
-      if fork_mode == :both && CONFIG[:parent_on_fork]
+      if fork_mode == :both && Config.config[:parent_on_fork]
         fork_mode = :parent
       end
 
       parent_pid = Process.pid
+      session = Ractor.current[:DEBUGGER_SESSION]
 
       # before fork
       case fork_mode
@@ -2515,31 +2543,31 @@ module DEBUGGER__
         }
         child_hook = -> {
           DEBUGGER__.info "Detaching after fork from child process #{Process.pid}"
-          SESSION.deactivate
+          session.deactivate
         }
       when :child
-        SESSION.before_fork false
+        session.before_fork false
 
         parent_hook = -> child_pid {
           DEBUGGER__.info "Detaching after fork from parent process #{Process.pid}"
-          SESSION.after_fork_parent
-          SESSION.deactivate
+          session.after_fork_parent
+          session.deactivate
         }
         child_hook = -> {
           DEBUGGER__.info "Attaching after process #{parent_pid} fork to child process #{Process.pid}"
-          SESSION.activate on_fork: true
+          session.activate on_fork: true
         }
       when :both
-        SESSION.before_fork
+        session.before_fork
 
         parent_hook = -> child_pid {
-          SESSION.process_group.after_fork
-          SESSION.after_fork_parent
+          session.process_group.after_fork
+          session.after_fork_parent
         }
         child_hook = -> {
           DEBUGGER__.info "Attaching after process #{parent_pid} fork to child process #{Process.pid}"
-          SESSION.process_group.after_fork child: true
-          SESSION.activate on_fork: true
+          session.process_group.after_fork child: true
+          session.activate on_fork: true
         }
       end
 
@@ -2561,8 +2589,9 @@ module DEBUGGER__
 
       case sym
       when :INT, :SIGINT
-        if defined?(SESSION) && SESSION.active? && SESSION.intercept_trap_sigint?
-          return SESSION.save_int_trap(command.empty? ? command_proc : command.first)
+        session = Ractor.current[:DEBUGGER_SESSION]
+        if session && session.active? && session.intercept_trap_sigint?
+          return session.save_int_trap(command.empty? ? command_proc : command.first)
         end
       end
 
@@ -2624,16 +2653,20 @@ end
 
 module Kernel
   def debugger pre: nil, do: nil, up_level: 0
-    return if !defined?(::DEBUGGER__::SESSION) || !::DEBUGGER__::SESSION.active?
+    session = Ractor.current[:DEBUGGER_SESSION]
+    if !session || !session.active?
+      ::DEBUGGER__.start
+      session = Ractor.current[:DEBUGGER_SESSION]
+    end
 
     if pre || (do_expr = binding.local_variable_get(:do))
       cmds = ['#debugger', pre, do_expr]
     end
 
-    if ::DEBUGGER__::SESSION.in_subsession?
+    if session.in_subsession?
       if cmds
         commands = [*cmds[1], *cmds[2]].map{|c| c.split(';;').join("\n")}
-        ::DEBUGGER__::SESSION.add_preset_commands cmds[0], commands, kick: false, continue: false
+        session.add_preset_commands cmds[0], commands, kick: false, continue: false
       end
     else
       loc = caller_locations(up_level, 1).first; ::DEBUGGER__.add_line_breakpoint loc.path, loc.lineno + 1, oneshot: true, command: cmds

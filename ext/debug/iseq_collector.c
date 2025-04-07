@@ -86,6 +86,8 @@ count_iseq(VALUE self)
 void
 Init_iseq_collector(void)
 {
+
+    RB_EXT_RACTOR_SAFE(true);
     VALUE rb_mObjSpace = rb_const_get(rb_cObject, rb_intern("ObjectSpace"));
     rb_define_singleton_method(rb_mObjSpace, "each_iseq", each_iseq, 0);
     rb_define_singleton_method(rb_mObjSpace, "count_iseq", count_iseq, 0);

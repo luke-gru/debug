@@ -34,7 +34,7 @@ module DEBUGGER__
       end
 
       def colorize str, color
-        if !CONFIG[:no_color]
+        if !Config.config[:no_color]
           irb_colorize str, color
         else
           str
@@ -49,7 +49,7 @@ module DEBUGGER__
     if defined? IRB::ColorPrinter.pp
       def color_pp obj, width
         with_inspection_error_guard do
-          if !CONFIG[:no_color]
+          if !Config.config[:no_color]
             IRB::ColorPrinter.pp(obj, "".dup, width)
           else
             obj.pretty_inspect
@@ -64,7 +64,7 @@ module DEBUGGER__
       end
     end
 
-    def colored_inspect obj, width: SESSION.width, no_color: false
+    def colored_inspect obj, width: Ractor.current[:DEBUGGER_SESSION].width, no_color: false
       with_inspection_error_guard do
         if !no_color
           color_pp obj, width
@@ -77,11 +77,19 @@ module DEBUGGER__
     if defined? IRB::Color.colorize_code
       if defined? SUPPORT_COLORABLE_OPTION
         def colorize_code code
-          IRB::Color.colorize_code(code, colorable: true)
+          if Ractor.current == Ractor.main
+            IRB::Color.colorize_code(code, colorable: true)
+          else
+            code
+          end
         end
       else
         def colorize_code code
-          IRB::Color.colorize_code(code)
+          if Ractor.current == Ractor.main
+            IRB::Color.colorize_code(code)
+          else
+            code
+          end
         end
       end
     else

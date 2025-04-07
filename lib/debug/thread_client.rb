@@ -30,7 +30,7 @@ module DEBUGGER__
     end
 
     def skip_config_skip_path?(path)
-      (skip_paths = CONFIG[:skip_path]) && skip_paths.any?{|skip_path| path.match?(skip_path)}
+      (skip_paths = Config.config[:skip_path]) && skip_paths.any?{|skip_path| path.match?(skip_path)}
     end
 
     def skip_internal_path?(path)
@@ -52,7 +52,7 @@ module DEBUGGER__
 
   class ThreadClient
     def self.current
-      Thread.current.debug_thread_client ||= SESSION.get_thread_client
+      Thread.current.debug_thread_client ||= Ractor.current[:DEBUGGER_SESSION].get_thread_client
     end
 
     include Color
@@ -113,8 +113,8 @@ module DEBUGGER__
       @id = id
       @thread = thr
       @target_frames = nil
-      @q_evt = q_evt
-      @q_cmd = q_cmd
+      @q_evt = q_evt # Queue
+      @q_cmd = q_cmd # Queue
       @step_tp = nil
       @output = []
       @frame_formatter = method(:default_frame_formatter)
@@ -280,6 +280,7 @@ module DEBUGGER__
       end
 
       cf = @target_frames.first
+      p "FrameInfo: #{cf}"
       if cf
         case event
         when :return, :b_return, :c_return
@@ -299,9 +300,11 @@ module DEBUGGER__
       end
 
       if event != :pause
+        $stderr.puts "suspend !pause"
         unless bp&.skip_src
+          $stderr.puts "suspend !skip_src"
           show_src
-          show_frames CONFIG[:show_frames]
+          show_frames Config.config[:show_frames]
         end
 
         set_mode :waiting
@@ -314,6 +317,7 @@ module DEBUGGER__
           event! :suspend, event
         end
       else
+        $stderr.puts "suspend pause"
         set_mode :waiting
       end
 
@@ -349,7 +353,7 @@ module DEBUGGER__
           next if !yield(tp)
           next if tp.path.start_with?(__dir__)
           next if tp.path.start_with?('<internal:trace_point>')
-          next unless File.exist?(tp.path) if CONFIG[:skip_nosrc]
+          next unless File.exist?(tp.path) if Config.config[:skip_nosrc]
           loc = caller_locations(1, 1).first
           next if skip_location?(loc)
           next if iter && (iter -= 1) > 0
@@ -368,7 +372,7 @@ module DEBUGGER__
           next if !yield(tp)
           next if tp.path.start_with?(__dir__)
           next if tp.path.start_with?('<internal:trace_point>')
-          next unless File.exist?(tp.path) if CONFIG[:skip_nosrc]
+          next unless File.exist?(tp.path) if Config.config[:skip_nosrc]
           loc = caller_locations(1, 1).first
           next if skip_location?(loc)
           next if iter && (iter -= 1) > 0
@@ -468,7 +472,7 @@ module DEBUGGER__
       if file_lines = frame.file_lines
         frame_line = frame.location.lineno - 1
 
-        if CONFIG[:no_lineno]
+        if Config.config[:no_lineno]
           lines = file_lines
         else
           lines = file_lines.map.with_index do |e, i|
@@ -507,7 +511,7 @@ module DEBUGGER__
       exit!
     end
 
-    def show_src(frame_index: @current_frame_index, update_line: false, ignore_show_line: false, max_lines: CONFIG[:show_src_lines], **options)
+    def show_src(frame_index: @current_frame_index, update_line: false, ignore_show_line: false, max_lines: Config.config[:show_src_lines], **options)
       if frame = get_frame(frame_index)
         begin
           if ignore_show_line
@@ -672,7 +676,7 @@ module DEBUGGER__
       end
       mono_info = "#{label} = #{inspected}"
 
-      w = SESSION::width
+      w = Ractor.current[:DEBUGGER_SESSION].width
 
       if mono_info.length >= w
         maximum_value_width = w - "#{label} = ".length
@@ -881,7 +885,7 @@ module DEBUGGER__
       # assertions
       raise "@mode is #{@mode}" if !waiting?
 
-      unless SESSION.active?
+      unless Ractor.current[:DEBUGGER_SESSION].active?
         pp caller
         set_mode :running
         return
@@ -890,7 +894,9 @@ module DEBUGGER__
       while true
         begin
           set_mode :waiting if !waiting?
+          $stderr.puts "waiting for cmd"
           cmds = @q_cmd.pop
+          $stderr.puts "got cmd: #{cmds}"
           # pp [self, cmds: cmds]
 
           break unless cmds
@@ -1050,7 +1056,7 @@ module DEBUGGER__
             end
           when :pp
             result = frame_eval(eval_src)
-            puts color_pp(result, SESSION.width)
+            puts color_pp(result, Ractor.current[:DEBUGGER_SESSION].width)
             if alloc_path = ObjectSpace.allocation_sourcefile(result)
               puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
             end
@@ -1118,7 +1124,7 @@ module DEBUGGER__
 
           when :whereami
             show_src ignore_show_line: true
-            show_frames CONFIG[:show_frames]
+            show_frames Config.config[:show_frames]
 
           when :edit
             show_by_editor(args.first)
@@ -1445,7 +1451,7 @@ module DEBUGGER__
       end
 
       def screen_width
-        SESSION.width
+        Ractor.current[:DEBUGGER_SESSION].width
       rescue Errno::EINVAL # in `winsize': Invalid argument - <STDIN>
         80
       end
