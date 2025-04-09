@@ -56,6 +56,7 @@ module DEBUGGER__
     end
 
     def ask prompt
+      $stderr.puts "#{self.class}#ask"
       setup_interrupt do
         print prompt
         ($stdin.gets || '').strip
@@ -78,9 +79,8 @@ module DEBUGGER__
     end
 
     def readline prompt = '(rdbg)'
-      setup_interrupt do
-        (@console.readline(prompt) || 'quit').strip
-      end
+      $stderr.puts "#{self.class}#readline"
+      (@console.readline(prompt) || 'quit').strip
     end
 
     def setup_interrupt

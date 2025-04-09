@@ -231,6 +231,7 @@ module DEBUGGER__
 
       set_mode :waiting
 
+      dbg "#{self.class}#wait_reply: #{event_arg.inspect}"
       event!(*event_arg)
       wait_next_action
     end
@@ -280,7 +281,7 @@ module DEBUGGER__
       end
 
       cf = @target_frames.first
-      p "FrameInfo: #{cf}"
+      dbg "#{self.class}#suspend event=#{event} FrameInfo: #{cf}"
       if cf
         case event
         when :return, :b_return, :c_return
@@ -300,9 +301,9 @@ module DEBUGGER__
       end
 
       if event != :pause
-        $stderr.puts "suspend !pause"
+        dbg "#{self.class}#suspend !pause"
         unless bp&.skip_src
-          $stderr.puts "suspend !skip_src"
+          dbg "#{self.class}#suspend !skip_src"
           show_src
           show_frames Config.config[:show_frames]
         end
@@ -317,7 +318,7 @@ module DEBUGGER__
           event! :suspend, event
         end
       else
-        $stderr.puts "suspend pause"
+        dbg "#{self.class}#suspend event=:pause"
         set_mode :waiting
       end
 
@@ -342,11 +343,11 @@ module DEBUGGER__
       @step_tp.disable if @step_tp
 
       thread = Thread.current
-      subsession_id = SESSION.subsession_id
+      subsession_id = Ractor.current[:DEBUGGER_SESSION].subsession_id
 
       if SUPPORT_TARGET_THREAD
         @step_tp = TracePoint.new(*events){|tp|
-          if SESSION.stop_stepping? tp.path, tp.lineno, subsession_id
+          if Ractor.current[:DEBUGGER_SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
             tp.disable
             next
           end
@@ -365,7 +366,7 @@ module DEBUGGER__
       else
         @step_tp = TracePoint.new(*events){|tp|
           next if thread != Thread.current
-          if SESSION.stop_stepping? tp.path, tp.lineno, subsession_id
+          if Ractor.current[:DEBUGGER_SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
             tp.disable
             next
           end
@@ -431,15 +432,20 @@ module DEBUGGER__
       @current_frame_index = saved_current_frame_index
     end
 
-    SPECIAL_LOCAL_VARS = [
+    SPECIAL_LOCAL_VARS = Ractor.make_shareable([
       [:raised_exception, "_raised"],
       [:return_value,     "_return"],
-    ]
+    ])
 
     def frame_eval src, re_raise: false, binding_location: false
+      dbg "#{self.class}#frame_eval: #{src.inspect} (#{binding_location})"
       @success_last_eval = false
 
-      b = current_frame&.eval_binding || TOPLEVEL_BINDING
+      b = current_frame&.eval_binding
+      if !b && Ractor.current != Ractor.main
+        raise "Invalid binding"
+      end
+      b ||= TOPLEVEL_BINDING
 
       special_local_variables current_frame do |name, var|
         b.local_variable_set(name, var) if /\%/ !~ name
@@ -451,11 +457,13 @@ module DEBUGGER__
       result
 
     rescue SystemExit
+      dbg "SystemExit during eval!"
       raise
     rescue Exception => e
       return yield(e) if block_given?
 
-      puts "eval error: #{e}"
+      puts "#{Ractor.current}: eval error: #{e}"
+      puts e.full_message # TODO
 
       e.backtrace_locations&.each do |loc|
         break if loc.path == __FILE__
@@ -867,7 +875,8 @@ module DEBUGGER__
 
     if ::Fiber.respond_to?(:blocking)
       private def fiber_blocking
-        ::Fiber.blocking{yield}
+        #::Fiber.blocking{yield}
+        yield
       end
     else
       private def fiber_blocking
@@ -881,6 +890,7 @@ module DEBUGGER__
       replay_suspend
     end
 
+    # pops @q_cmd queue and process the commands
     def wait_next_action_
       # assertions
       raise "@mode is #{@mode}" if !waiting?
@@ -894,9 +904,15 @@ module DEBUGGER__
       while true
         begin
           set_mode :waiting if !waiting?
-          $stderr.puts "waiting for cmd"
-          cmds = @q_cmd.pop
-          $stderr.puts "got cmd: #{cmds}"
+          dbg "#{self.class}#wait_next_action_ waiting for cmd"
+          cmds = nil
+          begin
+            cmds = @q_cmd.pop
+          rescue => e
+            dbg "#{self.class}#wait_next_action_ @q_cmd.pop error: #{e.message}"
+            raise
+          end
+          dbg "#{self.class}#wait_next_action_ got cmd: #{cmds.inspect}"
           # pp [self, cmds: cmds]
 
           break unless cmds
@@ -909,7 +925,6 @@ module DEBUGGER__
         case cmd
         when :continue
           break
-
         when :step
           step_type = args[0]
           iter = args[1]
@@ -1050,15 +1065,21 @@ module DEBUGGER__
           case eval_type
           when :p
             result = frame_eval(eval_src)
-            puts "=> " + color_pp(result, 2 ** 30)
-            if alloc_path = ObjectSpace.allocation_sourcefile(result)
-              puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
+            dbg "eval result from p: #{result.inspect}"
+            puts "=> " + result.to_s
+            #puts "=> " + color_pp(result, 2 ** 30)
+            if Ractor.current == Ractor.main
+              if alloc_path = ObjectSpace.allocation_sourcefile(result)
+                puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
+              end
             end
           when :pp
             result = frame_eval(eval_src)
             puts color_pp(result, Ractor.current[:DEBUGGER_SESSION].width)
-            if alloc_path = ObjectSpace.allocation_sourcefile(result)
-              puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
+            if Ractor.current == Ractor.main
+              if alloc_path = ObjectSpace.allocation_sourcefile(result)
+                puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
+              end
             end
           when :call
             result = frame_eval(eval_src)
@@ -1247,15 +1268,17 @@ module DEBUGGER__
     rescue SuspendReplay, SystemExit, Interrupt
       raise
     rescue Exception => e
-      STDERR.puts e.cause.inspect
-      STDERR.puts e.inspect
+      dbg "#{self.class}#wait_next_action_ Exception: #{e.message}"
+      $stderr.puts e.cause.inspect
+      $stderr.puts e.inspect
+      $stderr.puts e.backtrace
       Thread.list.each{|th|
-        STDERR.puts "@@@ #{th}"
+        $stderr.puts "@@@ #{th}"
         th.backtrace.each{|b|
-          STDERR.puts " > #{b}"
+          $stderr.puts " > #{b}"
         }
       }
-      p ["DEBUGGER Exception: #{__FILE__}:#{__LINE__}", e, e.backtrace]
+      $stderr.puts ["DEBUGGER Exception: #{__FILE__}:#{__LINE__}", e, e.backtrace]
       raise
     ensure
       @returning = false

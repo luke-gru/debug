@@ -1,0 +1,139 @@
+How
+===
+
+High-level Overview
+-------------------
+
+The debugger uses tracepoint events for breakpoints. There's a single SESSION
+object that keeps track of the whole debugging session. There's a session server
+that has an event queue that processes events. When breakpoints are added (such
+as calls to "debugger" or adding breakpoints interactively), The breakpoint objects
+send events to the session server thread for processing. There, the session server
+enters a session "subsession", stopping all threads and then defers to the UI for
+interactivity with the client.
+
+How to Make Ractor Friendly
+---------------------------
+
+The session object is difficult to work with because you can't share it across Ractors.
+It would be nice if the session server were global still, but there was a ractor-friendly Queue (q_evt)
+where we could send all the events so the session server could deal with them. Or, we could make this
+session server its own ractor, and send events to it this way.
+
+Edit: I tried this but it's very difficult to get this working. It's easier to have 1 session
+object per Ractor.
+
+What's Working
+--------------
+Using explicit "debugger" call:
+c,n,p in main ractor
+c,n,p in non-ractor
+c,n,p from non-main ractor to main ractor
+
+What's Not Working
+------------------
+* Stopping other ractors when in the debugger
+  I wonder if there's a way to do this in pure Ruby. Probably not,
+  but we could create a session automatically whenever a ractor begins, and
+  then the line TracePoint would kick in and call `on_pause`. We would have to
+  check if we're NOT in a subsession, and kick it off always if not.
+  It might be easier to just do it via an ext or in Ruby itself, something like:
+  Ractor.stop_all_others and Ractor.continue_all_others
+
+What's Not Tested
+-----------------
+* All the other commands
+* The server stuff
+* Opening with VSCode, etc.
+
+
+
+Source Code Overview
+--------------------
+
+Focus on local sessions (DEBUGGER.start)
+Using require 'debug' and "debugger" in source code
+
+Loading:
+  require "debug/session", sets CONFIG object
+  DEBUGGER__.start(nonstop: true)
+
+Start methods (there are a few):
+  Session.start (we'll start with this one)
+  Session.initialize_session { UI_LocalConsole.new }
+    SESSION = Session.new
+    SESSION.activate(&block)
+      @session_server = Thread.new do
+        thc = get_thread_client Thread.current
+        thc.mark_as_management
+       # 2 new TPs: [:thread_begin, :thread_end], to add/delete @th_clients
+       session_server_main
+         while evt = pop_event # @q_evt.pop
+           process_event(evt)
+         ensure
+           deactivate
+         end
+      end
+
+Session.new
+  creates 2 TPs:
+  1) @thread_stopper: TracePoint.new(:line) { ThreadClient.current.running.on_pause } (NOT ENABLED)
+  2) @tp_load_script: TP.new(:script_compiled).enable
+
+class DEBUGGER::UI_LocalConsole
+  attr_reader :console # Console.new
+  # There's some sort of sigint hook to trap sigint and raise an Interrupt on the session
+  # server thread
+end
+
+Kernel#debugger call: (session.rb)
+  DEBUGGER__.add_line_breakpoint(loc.path, loc.lineno+1, oneshot: true)
+    SESSION.add_line_breakpoint
+      bp = LineBreakpoint.new
+        Session.try_activate
+          nearest_iseq = iterate_iseq() # find nearest iseq
+          activate_exact(nearest_iseq)
+            activate
+              @key = [@path, @line]
+              setup
+                @tp = TracePoint.new(@type) do # :line
+                  delete if @oneshot
+                  suspend
+                    ThreadClient.current.on_breakpoint @tp, self
+                      ThreadClient#suspend tp.event, tp, bp
+                        event! :suspend, :breakpoint, bp.key
+                          @q_evt << [self, @output, event, generate_info, [:breakpoint, bp.key]]
+                          # this wakes the session server, which processes it
+                        wait_next_action
+                          _wait_next_action
+                            @q_cmd.pop # blocking
+                end
+              enable
+                @tp.enable(target: @iseq, target_line: @line)
+      add_bp bp # @bps[bp.key] = bp
+
+# When event queue is pushed to:
+@q_evt << [event_stuff]
+Session#process_event(evt)
+  enter_subsession 
+    stop_all_threads
+      @thread_stopper.enable # Tracepoint.new(:line) { tc = ThreadClient.current; tc.on_pause; }.enable
+  @ui.event :suspend_bp, bp, @tc.id
+  wait_command_loop
+    line = @ui.readline("(rdbg)")
+    process_command(line)
+      # can either eval any line of code or contain a command
+      # commands are in @commands, let's say they press 'next'
+      # @commands[name] = SessionCommand(block)
+      cmd = @commands[cmd_name]
+      cmd.block.call(cmd_arg)
+        step_command :next, arg
+          leave_subsession [:step, :next, nil.to_i]
+            restart_all_threads
+            request_tc *args
+              @tc << args # ThreadClient#<<(req)
+                ThreadClient#@q_cmd << req
+                # Wakes up the fiber in ThreadClient that was suspended in wait_next_action_
+                  
+            @tc = nil
+  

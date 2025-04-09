@@ -19,6 +19,39 @@ if $0.end_with?('bin/bundle') && ARGV.first == 'exec'
   return
 end
 
+# my debugging helper
+module Kernel
+  def dbg msg, ractor: true
+    msg = msg.sub(/\ADEBUGGER__::/, '')
+    if ractor
+      msg = "#{Ractor.current}: #{msg}"
+    end
+    $stderr.puts msg
+  end
+end
+
+module RactorMod
+  def new(*args, &block)
+    r = super
+    Ractor.add r
+    r
+  end
+end
+class Ractor
+  prepend RactorMod
+  @all = []
+  def self.refresh!
+    @all.reject! { |r| r.to_s =~ /terminated/ }
+  end
+  def self.all
+    refresh!
+    @all
+  end
+  def self.add(r)
+    @all << r
+  end
+end
+
 # restore RUBYOPT
 if (added_opt = ENV['RUBY_DEBUG_ADDED_RUBYOPT']) &&
    (rubyopt = ENV['RUBYOPT']) &&
@@ -136,6 +169,8 @@ module DEBUGGER__
       @has_keep_script_lines = defined?(RubyVM.keep_script_lines)
 
       @tp_load_script = TracePoint.new(:script_compiled){|tp|
+        next if tp.instruction_sequence.inspect =~ /<compiled>@\(rdbg\)/
+        dbg "@tp_load_script: Loading #{tp.path} #{tp.lineno}"
         eval_script = tp.eval_script unless @has_keep_script_lines
         ThreadClient.current.on_load tp.instruction_sequence, eval_script
       }
@@ -176,10 +211,7 @@ module DEBUGGER__
 
       q = Queue.new
       first_q = Queue.new
-      $stderr.puts "Activating #{self.class}"
-      if Ractor.main != Ractor.current
-        $stderr.puts "In Ractor"
-      end
+      dbg "#{self.class}#activate"
 
       outer_th = Thread.current
 
@@ -200,15 +232,18 @@ module DEBUGGER__
         end
 
         @tp_thread_begin = TracePoint.new(:thread_begin) do |tp|
+          dbg "TP thread_begin: #{Thread.current}"
           get_thread_client
         end
         @tp_thread_begin.enable
 
         @tp_thread_end = TracePoint.new(:thread_end) do |tp|
+          dbg "TP thread_end: #{Thread.current}"
           @th_clients.delete(Thread.current)
         end
         @tp_thread_end.enable
 
+        # TODO?
         if Ractor.current != Ractor.main
           create_thread_client(outer_th)
         end
@@ -229,6 +264,7 @@ module DEBUGGER__
     end
 
     def deactivate
+      dbg "#{self.class}#deactivate for #{Thread.current}"
       get_thread_client.deactivate
       @thread_stopper.disable
       @tp_load_script.disable
@@ -262,15 +298,22 @@ module DEBUGGER__
     end
 
     def session_server_main
-      while evt = pop_event
-        $stderr.puts "sess server: Processing event: #{evt}"
-        process_event evt
+      begin
+        while evt = pop_event
+          dbg "#{self.class}#session_server_main: popped event: #{evt}"
+          process_event evt
+        end
+      rescue => e
+        dbg "ERROR in #{self.class}#session_server_main: #{e.full_message}"
+      ensure
+        deactivate
       end
-    ensure
-      deactivate
     end
 
+    # sends to tc.q_cmd
     def request_tc(req)
+      raise "[BUG] no ThreadClient" unless @tc
+      dbg "#{self.class}#request_tc: req=#{req.inspect}"
       @tc << req
     end
 
@@ -288,6 +331,8 @@ module DEBUGGER__
       tc, output, ev, @internal_info, *ev_args = evt
 
       output.each{|str| @ui.puts str} if ev != :suspend
+
+      dbg "#{self.class}#process_event: #{ev} #{ev_args.inspect}"
 
       # special event, tc is nil
       # and we don't want to set @tc to the newly created thread's ThreadClient
@@ -1645,13 +1690,11 @@ module DEBUGGER__
     end
 
     private def create_thread_client th
-      # TODO: Ractor support
       #raise "Only session_server can create thread_client" unless Thread.current == @session_server
       @th_clients[th] = ThreadClient.new((@tc_id += 1), @q_evt, Queue.new, th)
     end
 
     private def ask_thread_client th
-      # TODO: Ractor support
       q2 = Queue.new
       # tc, output, ev, @internal_info, *ev_args = evt
       @q_evt << [nil, [], :thread_begin, nil, th, q2]
@@ -1697,13 +1740,14 @@ module DEBUGGER__
         next unless tc.running?
         next if tc == @tc
 
-        $stderr.puts "TC#on_pause"
+        dbg "TC#on_pause"
         tc.on_pause
       end
     end
 
+    # TODO: need to stop all threads on all ractors
     private def stop_all_threads
-      $stderr.puts "stop_all_threads: #{running_thread_clients_count}"
+      dbg "stop_all_threads: #{running_thread_clients_count}"
       return if running_thread_clients_count == 0
 
       stopper = @thread_stopper
@@ -1711,12 +1755,13 @@ module DEBUGGER__
     end
 
     private def restart_all_threads
-      $stderr.puts "Restarting all"
+      dbg "Restarting all threads"
       stopper = @thread_stopper
       stopper.disable if stopper.enabled?
 
       waiting_thread_clients.each{|tc|
         next if @tc == tc
+        dbg "Sending :continue to tc #{tc}"
         tc << :continue
       }
     end
@@ -1726,6 +1771,7 @@ module DEBUGGER__
       if !@subsession_stack.empty?
         DEBUGGER__.debug{ "Enter subsession (nested #{@subsession_stack.size})" }
       else
+        dbg "Entering subsession, stopping threads"
         DEBUGGER__.debug{ "Enter subsession" }
         stop_all_threads
         @process_group.lock
@@ -1739,6 +1785,7 @@ module DEBUGGER__
       @subsession_stack.pop
 
       if @subsession_stack.empty?
+        dbg "Leaving subsession, restarting all threads"
         DEBUGGER__.debug{ "Leave subsession" }
         @process_group.unlock
         restart_all_threads
@@ -1749,7 +1796,7 @@ module DEBUGGER__
       request_tc type if type
       @tc = nil
     rescue Exception => e
-      STDERR.puts PP.pp([e, e.backtrace], ''.dup)
+      $stderr.puts PP.pp([e, e.backtrace], ''.dup)
       raise
     end
 
@@ -1961,7 +2008,7 @@ module DEBUGGER__
               rescue SystemExit
                 exit!
               rescue Exception => e
-                @ui = STDERR unless @ui
+                @ui = $stderr unless @ui
                 @ui.puts "Error while postmortem console: #{e.inspect}"
               end
             end
@@ -2176,6 +2223,7 @@ module DEBUGGER__
 
   class UI_Base
     def event type, *args
+      dbg "#{self.class}#event type=#{type}, args=#{args.inspect}"
       case type
       when :suspend_bp
         i, bp = *args
@@ -2233,8 +2281,8 @@ module DEBUGGER__
       unless Ractor.current[:DEBUGGER_SESSION]
         require_relative 'local'
         initialize_session { UI_LocalConsole.new }
+        setup_initial_suspend unless nonstop
       end
-      setup_initial_suspend unless nonstop
     end
   end
 
@@ -2280,21 +2328,21 @@ module DEBUGGER__
   # boot utilities
 
   def self.setup_initial_suspend
-    $stderr.puts "Setting up suspend"
+    dbg "Setting up initial suspend"
     if !Config.config[:nonstop]
       case
       when Config.config[:stop_at_load]
-        $stderr.puts "Stop at load"
+      dbg "Stop at load"
         add_line_breakpoint __FILE__, __LINE__ + 1, oneshot: true, hook_call: false
         nil # stop here
       when path = ENV['RUBY_DEBUG_INITIAL_SUSPEND_PATH']
         add_line_breakpoint path, 0, oneshot: true, hook_call: false
       when loc = ::DEBUGGER__.require_location
-        $stderr.puts "Stop at loc"
+        dbg "Stop at loc"
         # require 'debug/start' or 'debug'
         add_line_breakpoint loc.absolute_path, loc.lineno + 1, oneshot: true, hook_call: false
       else
-        $stderr.puts "oneshot"
+        dbg "oneshot"
         # -r
         add_line_breakpoint $0, 0, oneshot: true, hook_call: false
       end
@@ -2303,6 +2351,7 @@ module DEBUGGER__
 
   class << self
     def initialize_session(&init_ui)
+      dbg "Session start"
       DEBUGGER__.info "Session start (pid: #{Process.pid})"
       session = Ractor.current[:DEBUGGER_SESSION] = Session.new
       session.activate init_ui.call
@@ -2654,8 +2703,9 @@ end
 module Kernel
   def debugger pre: nil, do: nil, up_level: 0
     session = Ractor.current[:DEBUGGER_SESSION]
+    dbg "Calling Kernel#debugger, session exists: #{!!session}"
     if !session || !session.active?
-      ::DEBUGGER__.start
+      ::DEBUGGER__.start(nonstop: true)
       session = Ractor.current[:DEBUGGER_SESSION]
     end
 

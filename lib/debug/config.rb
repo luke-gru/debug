@@ -61,12 +61,22 @@ module DEBUGGER__
   CONFIG_MAP = Ractor.make_shareable(CONFIG_SET.map{|k, (ev, _)| [k, ev]}.to_h)
 
   class Config
+    attr_writer :config
     def self.config
       Ractor.current[:DEBUGGER_CONFIG]
     end
 
     def self.config=(config)
+      if Hash === config
+        config = from(config)
+      end
       Ractor.current[:DEBUGGER_CONFIG] = config
+    end
+
+    def self.from hash
+      conf = Config.allocate
+      conf.config = hash
+      conf
     end
 
     def initialize argv

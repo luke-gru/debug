@@ -8,14 +8,14 @@ module DEBUGGER__
 
     attr_reader :key, :skip_src
 
-    def initialize cond, command, path, do_enable: true
+    def initialize cond, command, path, do_enable: true, do_setup: true
       @deleted = false
 
       @cond = cond
       @command = command
       @path = path
 
-      setup
+      setup if do_setup
       enable if do_enable
     end
 
@@ -66,6 +66,7 @@ module DEBUGGER__
         Ractor.current[:DEBUGGER_SESSION].add_preset_commands provider, cmds, kick: false, continue: nonstop
       end
 
+      dbg "#{self.class}#suspend"
       ThreadClient.current.on_breakpoint @tp, self
     end
 
@@ -153,7 +154,7 @@ module DEBUGGER__
 
       @key = [path, @line].freeze
 
-      super(cond, command, path)
+      super(cond, command, path, do_enable: false, do_setup: false)
 
       try_activate unless skip_activate
       @pending = !@iseq
@@ -161,8 +162,10 @@ module DEBUGGER__
 
     def setup
       return unless @type
+      dbg "#{self.class}#setup oneshot:#{@oneshot}"
 
       @tp = TracePoint.new(@type) do |tp|
+        dbg "#{self.class} in TP type=#{@type}"
         if @cond
           next unless safe_eval tp.binding, @cond
         end

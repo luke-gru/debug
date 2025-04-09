@@ -2,8 +2,7 @@
 module DEBUGGER__
   class Console
     begin
-      raise LoadError if Config.config[:no_reline]
-      require 'reline'
+      raise LoadError, "use readline"
 
       require_relative 'color'
 
@@ -108,7 +107,7 @@ module DEBUGGER__
 
     rescue LoadError
       begin
-        require 'readline.so'
+        require 'readlie.so'
 
         def readline_setup
           load_history_if_not_loaded
