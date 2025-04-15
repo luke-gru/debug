@@ -23,7 +23,7 @@ module DEBUGGER__
     end
 
     def session
-      Ractor.current[:DEBUGGER_SESSION]
+      Ractor.current[:DEBUGGER__SESSION]
     end
 
     def deactivate_sigint
@@ -52,15 +52,18 @@ module DEBUGGER__
 
     def quit n
       yield
+      dbg "#{self.class}#quit Exiting"
+      DEBUGGER__.without_warnings do
+        DEBUGGER__.const_set(:EXITING, true)
+      end
       exit n
     end
 
     def ask prompt
-      $stderr.puts "#{self.class}#ask"
-      setup_interrupt do
-        print prompt
-        ($stdin.gets || '').strip
-      end
+      dbg "#{self.class}#ask"
+      #setup_interrupt do # TODO: ractors
+        (@console.readline(prompt) || '').strip
+      #end
     end
 
     def puts str = nil
@@ -76,13 +79,16 @@ module DEBUGGER__
       when nil
         $stdout.puts
       end
+    ensure
+      $stdout.flush
     end
 
     def readline prompt = '(rdbg)'
-      $stderr.puts "#{self.class}#readline"
+      dbg "#{self.class}#readline"
       (@console.readline(prompt) || 'quit').strip
     end
 
+    # TODO: ractors
     def setup_interrupt
       session.intercept_trap_sigint false do
         current_thread = Thread.current # should be session_server thread

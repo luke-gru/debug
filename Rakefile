@@ -35,6 +35,11 @@ task :check_readme do
   end
 end
 
+desc "Run ractor tests"
+Rake::TestTask.new(:test_ractor) do |t|
+  t.test_files = FileList["test/console/ractor_test.rb"]
+end
+
 desc "Run debug.gem test-framework tests"
 Rake::TestTask.new(:test_test) do |t|
   t.test_files = FileList["test/support/*_test.rb"]

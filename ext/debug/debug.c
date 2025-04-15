@@ -2,6 +2,7 @@
 #include "ruby/ruby.h"
 #include "ruby/debug.h"
 #include "ruby/encoding.h"
+#include "ruby/ractor.h"
 #include "debug_version.h"
 //
 static VALUE rb_mDebugger;
@@ -99,14 +100,32 @@ di_body(const rb_debug_inspector_t *dc, void *ptr)
 static VALUE
 capture_frames(VALUE self, VALUE skip_path_prefix)
 {
-    return rb_debug_inspector_open(di_body, (void *)skip_path_prefix);
+    VALUE cRactor = rb_const_get(rb_cObject, rb_intern("Ractor"));
+    VALUE is_locked = rb_funcall(cRactor, rb_intern("locked_vm?"), 0);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("lock_vm"), 0);
+    }
+    VALUE ret = rb_debug_inspector_open(di_body, (void *)skip_path_prefix);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("unlock_vm"), 0);
+    }
+    return ret;
 }
 
 #ifdef RB_DEBUG_INSPECTOR_FRAME_DEPTH
 static VALUE
 frame_depth(VALUE self)
 {
-    return rb_debug_inspector_current_depth();
+    VALUE cRactor = rb_const_get(rb_cObject, rb_intern("Ractor"));
+    VALUE is_locked = rb_funcall(cRactor, rb_intern("locked_vm?"), 0);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("lock_vm"), 0);
+    }
+    VALUE ret = rb_debug_inspector_current_depth();
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("unlock_vm"), 0);
+    }
+    return ret;
 }
 #else
 static VALUE
@@ -196,6 +215,7 @@ void
 Init_debug(void)
 {
     RB_EXT_RACTOR_SAFE(true);
+
 #ifdef HAVE_RB_ISEQ
     VALUE rb_mRubyVM = rb_const_get(rb_cObject, rb_intern("RubyVM"));
     VALUE rb_cISeq = rb_const_get(rb_mRubyVM, rb_intern("InstructionSequence"));

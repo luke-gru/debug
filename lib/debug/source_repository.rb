@@ -15,14 +15,14 @@ module DEBUGGER__
     def get iseq
       return unless iseq
 
-      if CONFIG[:show_evaledsrc]
+      if Config.config[:show_evaledsrc]
         orig_src(iseq) || file_src(iseq)
       else
         file_src(iseq) || orig_src(iseq)
       end
     end
 
-    if defined?(RubyVM.keep_script_lines) && !defined?(Ractor)
+    if defined?(RubyVM.keep_script_lines)
       # Ruby 3.1 and later
       RubyVM.keep_script_lines = true
       require 'objspace'
@@ -46,7 +46,7 @@ module DEBUGGER__
       end
 
       def orig_src iseq
-        lines = iseq.script_lines&.map(&:chomp)
+        lines = iseq.script_lines&.map(&:dup).map(&:chomp)
         line = iseq.first_line
         if line > 1
           [*([''] * (line - 1)), *lines]
@@ -57,10 +57,13 @@ module DEBUGGER__
 
       def get_colored iseq
         if lines = @cmap[iseq]
+          dbg "#{self.class}#get_colored: cache hit for iseq #{iseq.inspect}, lines: #{lines}"
           lines
         else
           if src_lines = get(iseq)
-            @cmap[iseq] = colorize_code(src_lines.join("\n")).lines
+            @cmap[iseq] = colorize_code(src_lines.join("\n")).lines.freeze
+            dbg "#{self.class}#get_colored: got lines for iseq #{iseq.inspect}, lines: #{src_lines}"
+            @cmap[iseq]
           else
             nil
           end

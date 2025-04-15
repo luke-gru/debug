@@ -65,7 +65,7 @@ module DEBUGGER__
     end
 
     def file_lines
-      Ractor.current[:DEBUGGER_SESSION].source(self.iseq)
+      Ractor.current[:DEBUGGER__SESSION].source(self.iseq)
     end
 
     def frame_type

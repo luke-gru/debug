@@ -63,7 +63,7 @@ module DEBUGGER__
         provider, pre_cmds, do_cmds = @command
         nonstop = true if do_cmds
         cmds = [*pre_cmds&.split(';;'), *do_cmds&.split(';;')]
-        Ractor.current[:DEBUGGER_SESSION].add_preset_commands provider, cmds, kick: false, continue: nonstop
+        Ractor.current[:DEBUGGER__SESSION].add_preset_commands provider, cmds, kick: false, continue: nonstop
       end
 
       dbg "#{self.class}#suspend"
@@ -195,11 +195,12 @@ module DEBUGGER__
       @path = iseq.absolute_path
 
       @key = [@path, @line].freeze
-      Ractor.current[:DEBUGGER_SESSION].rehash_bps
+      Ractor.current[:DEBUGGER__SESSION].rehash_bps
       setup
       enable
 
       if @pending && !@oneshot
+        dbg "#{self.class}#activate: activated"
         DEBUGGER__.info "#{self} is activated."
       end
 
@@ -251,6 +252,7 @@ module DEBUGGER__
     end
 
     def try_activate root_iseq = nil
+      dbg "#{self.class}#try_activate"
       nearest = nil # NearestISeq
       iterate_iseq root_iseq do |iseq|
         iseq.traceable_lines_norec(line_events = {})
@@ -351,7 +353,7 @@ module DEBUGGER__
 
     def setup
       @tp = TracePoint.new(:line){|tp|
-        next if Ractor.current[:DEBUGGER_SESSION].in_subsession? # TODO: Ractor support
+        next if Ractor.current[:DEBUGGER__SESSION].in_subsession? # TODO: Ractor support
         next if ThreadClient.current.management?
         next if skip_path?(tp.path)
 

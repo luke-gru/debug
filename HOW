@@ -29,24 +29,55 @@ Using explicit "debugger" call:
 c,n,p in main ractor
 c,n,p in non-ractor
 c,n,p from non-main ractor to main ractor
+c in multiple ractors
+"list" in multiple ractors
+"p" in multiple ractors
+"next" works for multiple ractors
+"q", "q!"
+"kill", "kill!"
+"break [line]", "break [file]:[line]", "break", "break Class#method" works for current ractor
+"backtrace"
+"info locals", "info ivars", "info consts", "info g"
+"config"
 
 What's Not Working
 ------------------
-* Stopping other ractors when in the debugger
-  I wonder if there's a way to do this in pure Ruby. Probably not,
-  but we could create a session automatically whenever a ractor begins, and
-  then the line TracePoint would kick in and call `on_pause`. We would have to
-  check if we're NOT in a subsession, and kick it off always if not.
-  It might be easier to just do it via an ext or in Ruby itself, something like:
-  Ractor.stop_all_others and Ractor.continue_all_others
+* colors in the UI, and reline support
+* breakpoints for all ractors, right now just sets it for current ractor
+* Ctrl-C
 
 What's Not Tested
 -----------------
+* Watchpoints
+* Traces
+* Going up/down frames
+* "record" command
+* "source" command
 * All the other commands
 * The server stuff
 * Opening with VSCode, etc.
 
+Running Tests
+-------------
+RUBY_DEBUG_TEST_DEBUG_MODE=1 RUBY_DEBUG_TEST_NO_REMOTE=1 rake test_ractor
 
+Generating Tests
+----------------
+bin/gentest target.rb (see CONTRIBUTING.md)
+
+Bugs
+----
+* Sometimes doesn't show anything and requires to press enter to get back to
+  prompt
+
+TODO
+----
+* Add tests
+* Get tests to work
+
+Working On
+----------
+Getting tests to work
 
 Source Code Overview
 --------------------

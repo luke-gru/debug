@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
 module DEBUGGER__
-  LOG_LEVELS = {
+  LOG_LEVELS = Ractor.make_shareable({
     UNKNOWN: 0,
     FATAL:   1,
     ERROR:   2,
     WARN:    3,
     INFO:    4,
     DEBUG:   5
-  }.freeze
+  })
 
   CONFIG_SET = Ractor.make_shareable({
     # UI setting
@@ -63,14 +63,14 @@ module DEBUGGER__
   class Config
     attr_writer :config
     def self.config
-      Ractor.current[:DEBUGGER_CONFIG]
+      Ractor.current[:DEBUGGER__CONFIG]
     end
 
     def self.config=(config)
       if Hash === config
         config = from(config)
       end
-      Ractor.current[:DEBUGGER_CONFIG] = config
+      Ractor.current[:DEBUGGER__CONFIG] = config
     end
 
     def self.from hash
@@ -80,7 +80,6 @@ module DEBUGGER__
     end
 
     def initialize argv
-      $stderr.puts "Initing config"
       if self.class.config
         raise 'Can not make multiple configurations in one ractor'
       end
@@ -96,7 +95,7 @@ module DEBUGGER__
       end
 
       @config = {}
-      $stderr.puts "Updating config: #{_config} (#{_config.class})"
+      #$stderr.puts "Updating config: #{_config} (#{_config.class})"
       update _config
     end
 
@@ -146,7 +145,7 @@ module DEBUGGER__
 
       @config = conf
       self.class.config = @config
-      session = Ractor.current[:DEBUGGER_SESSION]
+      session = Ractor.current[:DEBUGGER__SESSION]
 
       # Post process
       if_updated old_conf, conf, :keep_alloc_site do |old, new|
@@ -210,7 +209,7 @@ module DEBUGGER__
           str << ''
         }
 
-        STDERR.puts str
+        $stderr.puts str
       end
     end
 
@@ -282,7 +281,7 @@ module DEBUGGER__
     end
 
     def self.parse_argv argv
-      $stderr.puts "parse_argv in #{Ractor.current}"
+      #$stderr.puts "parse_argv in #{Ractor.current}"
       config = {
         mode: :start,
         no_color: (nc = ENV['NO_COLOR']) && !nc.empty?,
@@ -457,7 +456,7 @@ module DEBUGGER__
         end
       end
 
-      $stderr.puts "parse_argv in #{Ractor.current}"
+      #$stderr.puts "parse_argv in #{Ractor.current}"
       config
     end
 
@@ -581,16 +580,16 @@ module DEBUGGER__
         end
       end
     end
-    @commands = cmds
-    @helps = helps
+    Ractor.current[:DEBUGGER__COMMANDS] = cmds
+    helps
   end
 
   def self.helps
-    (defined?(@helps) && @helps) || parse_help
+    Ractor.current[:DEBUGGER__HELPS] ||= parse_help
   end
 
   def self.commands
-    (defined?(@commands) && @commands) || (parse_help; @commands)
+    Ractor.current[:DEBUGGER__COMMANDS] || (parse_help; Ractor.current[:DEBUGGER__COMMANDS])
   end
 
   def self.help

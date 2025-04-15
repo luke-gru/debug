@@ -49,7 +49,7 @@ module DEBUGGER__
     if defined? IRB::ColorPrinter.pp
       def color_pp obj, width
         with_inspection_error_guard do
-          if !Config.config[:no_color]
+          if !Config.config[:no_color] && Ractor.current == Ractor.main # TODO: ractors
             IRB::ColorPrinter.pp(obj, "".dup, width)
           else
             obj.pretty_inspect
@@ -64,7 +64,7 @@ module DEBUGGER__
       end
     end
 
-    def colored_inspect obj, width: Ractor.current[:DEBUGGER_SESSION].width, no_color: false
+    def colored_inspect obj, width: Ractor.current[:DEBUGGER__SESSION].width, no_color: false
       with_inspection_error_guard do
         if !no_color
           color_pp obj, width
@@ -85,7 +85,7 @@ module DEBUGGER__
         end
       else
         def colorize_code code
-          if Ractor.current == Ractor.main
+          if Ractor.current == Ractor.main # TODO: fix colorization with ractors
             IRB::Color.colorize_code(code)
           else
             code
@@ -117,6 +117,8 @@ module DEBUGGER__
     def with_inspection_error_guard
       yield
     rescue Exception => ex
+      dbg "#{self.class}#with_inspection_error_guard: #{ex.inspect}"
+      dbg "#{ex.backtrace.join("\n")}"
       err_msg = "#{ex.inspect} rescued during inspection"
       string_result = obj.to_s rescue nil
 

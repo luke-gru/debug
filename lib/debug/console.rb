@@ -2,7 +2,7 @@
 module DEBUGGER__
   class Console
     begin
-      raise LoadError, "use readline"
+      raise LoadError, "use readline" if defined?(Ractor)
 
       require_relative 'color'
 
@@ -107,7 +107,7 @@ module DEBUGGER__
 
     rescue LoadError
       begin
-        require 'readlie.so'
+        require 'readline.so'
 
         def readline_setup
           load_history_if_not_loaded
@@ -132,7 +132,10 @@ module DEBUGGER__
 
         def readline prompt
           readline_setup
-          Readline.readline(prompt, true)
+          $stderr.puts "calling readline"
+          line = Readline.readline(prompt, true)
+          $stderr.puts "called readline"
+          line
         end
 
         def history

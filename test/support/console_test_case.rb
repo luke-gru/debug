@@ -141,7 +141,9 @@ module DEBUGGER__
                 is_ask_cmd = false
 
                 loop do
-                  assert_block(FailureMessage.new { create_message "Expected the REPL prompt to finish", test_info }) { !test_info.queue.empty? }
+                  assert_block(FailureMessage.new { create_message "Expected the REPL prompt to finish", test_info }) do
+                    !test_info.queue.empty?
+                  end
                   cmd = test_info.queue.pop
 
                   case cmd.to_s

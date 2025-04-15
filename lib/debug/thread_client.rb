@@ -2,6 +2,7 @@
 
 require 'objspace'
 require 'pp'
+require 'shellwords'
 
 require_relative 'color'
 
@@ -10,15 +11,51 @@ class ::Thread
 end
 
 module DEBUGGER__
-  M_INSTANCE_VARIABLES = method(:instance_variables).unbind
-  M_INSTANCE_VARIABLE_GET = method(:instance_variable_get).unbind
-  M_CLASS = method(:class).unbind
-  M_SINGLETON_CLASS = method(:singleton_class).unbind
-  M_KIND_OF_P = method(:kind_of?).unbind
-  M_RESPOND_TO_P = method(:respond_to?).unbind
-  M_METHOD = method(:method).unbind
-  M_OBJECT_ID = method(:object_id).unbind
-  M_NAME = method(:name).unbind
+  def self.m_instance_variables
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:instance_variables] = method(:instance_variables).unbind
+  end
+
+  def self.m_instance_variable_get
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:instance_variable_get] = method(:instance_variable_get).unbind
+  end
+
+  def self.m_class
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:class] = method(:class).unbind
+  end
+
+  def self.m_singleton_class
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:singleton_class] = method(:singleton_class).unbind
+  end
+
+  def self.m_kind_of_p
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:kind_of?] = method(:kind_of?).unbind
+  end
+
+  def self.m_respond_to_p
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:respond_to?] = method(:respond_to?).unbind
+  end
+
+  def self.m_method
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:method] = method(:method).unbind
+  end
+
+  def self.m_object_id
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:object_id] = method(:object_id).unbind
+  end
+
+  def self.m_name
+    (Ractor.current[:DEBUGGER__TC_METHODS] ||= {})[:name] = method(:name).unbind
+  end
+
+  #M_INSTANCE_VARIABLES = method(:instance_variables).unbind
+  #M_INSTANCE_VARIABLE_GET = method(:instance_variable_get).unbind
+  #M_CLASS = method(:class).unbind
+  #M_SINGLETON_CLASS = method(:singleton_class).unbind
+  #M_KIND_OF_P = method(:kind_of?).unbind
+  #M_RESPOND_TO_P = method(:respond_to?).unbind
+  #M_METHOD = method(:method).unbind
+  #M_OBJECT_ID = method(:object_id).unbind
+  #M_NAME = method(:name).unbind
 
   module SkipPathHelper
     def skip_path?(path)
@@ -44,15 +81,19 @@ module DEBUGGER__
   end
 
   module GlobalVariablesHelper
-    SKIP_GLOBAL_LIST = %i[$= $KCODE $-K $SAFE $FILENAME].freeze
+    SKIP_GLOBAL_LIST = Ractor.make_shareable(%i[$= $KCODE $-K $SAFE $FILENAME])
     def safe_global_variables
-      global_variables.reject{|name| SKIP_GLOBAL_LIST.include? name }
+      if Ractor.current == Ractor.main
+        global_variables.reject{|name| SKIP_GLOBAL_LIST.include? name }
+      else
+        %i[$stdin $stdout $stderr]
+      end
     end
   end
 
   class ThreadClient
     def self.current
-      Thread.current.debug_thread_client ||= Ractor.current[:DEBUGGER_SESSION].get_thread_client
+      Thread.current.debug_thread_client ||= Ractor.current[:DEBUGGER__SESSION].get_thread_client
     end
 
     include Color
@@ -277,7 +318,9 @@ module DEBUGGER__
       when replay_frames
         @target_frames = replay_frames
       else
+        dbg "#{self.class}#suspend capturing frames"
         @target_frames = DEBUGGER__.capture_frames(__dir__)
+        dbg "#{self.class}#suspend captured frames (#{@target_frames.size})"
       end
 
       cf = @target_frames.first
@@ -343,11 +386,11 @@ module DEBUGGER__
       @step_tp.disable if @step_tp
 
       thread = Thread.current
-      subsession_id = Ractor.current[:DEBUGGER_SESSION].subsession_id
+      subsession_id = Ractor.current[:DEBUGGER__SESSION].subsession_id
 
       if SUPPORT_TARGET_THREAD
         @step_tp = TracePoint.new(*events){|tp|
-          if Ractor.current[:DEBUGGER_SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
+          if Ractor.current[:DEBUGGER__SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
             tp.disable
             next
           end
@@ -366,7 +409,7 @@ module DEBUGGER__
       else
         @step_tp = TracePoint.new(*events){|tp|
           next if thread != Thread.current
-          if Ractor.current[:DEBUGGER_SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
+          if Ractor.current[:DEBUGGER__SESSION].stop_stepping? tp.path, tp.lineno, subsession_id
             tp.disable
             next
           end
@@ -443,7 +486,7 @@ module DEBUGGER__
 
       b = current_frame&.eval_binding
       if !b && Ractor.current != Ractor.main
-        raise "Invalid binding"
+        raise "Invalid binding for non-main ractor"
       end
       b ||= TOPLEVEL_BINDING
 
@@ -478,6 +521,7 @@ module DEBUGGER__
                 end_line: nil,
                 dir: +1)
       if file_lines = frame.file_lines
+        dbg "#{self.class}#get_src: #{frame.path} (#{frame.location.lineno}), lines: #{file_lines.size}, start: #{start_line}, end: #{end_line}, max: #{max_lines}"
         frame_line = frame.location.lineno - 1
 
         if Config.config[:no_lineno]
@@ -498,19 +542,23 @@ module DEBUGGER__
               end_line = frame.show_line - max_lines
               start_line = [end_line - max_lines, 0].max
             end
+            dbg "frame.show_line: #{frame.show_line} start_line: #{start_line}, end_line: #{end_line}"
           else
             start_line = [frame_line - max_lines/2, 0].max
+            dbg "!frame.show_line start_line: #{start_line}"
           end
         end
 
         unless end_line
           end_line = [start_line + max_lines, lines.size].min
+          dbg "!end_line end_line:#{end_line}"
         end
 
         if start_line != end_line && max_lines
           [start_line, end_line, lines]
         end
       else # no file lines
+        dbg "#{self.class}#get_src: #{frame.path} (#{frame.location.lineno}), no file lines!"
         nil
       end
     rescue Exception => e
@@ -546,6 +594,7 @@ module DEBUGGER__
     end
 
     def current_frame
+      dbg "#{self.class}#current_frame: #{@current_frame_index}"
       get_frame(@current_frame_index)
     end
 
@@ -601,8 +650,8 @@ module DEBUGGER__
       end
 
       if _self
-        M_INSTANCE_VARIABLES.bind_call(_self).sort.each{|iv|
-          value = M_INSTANCE_VARIABLE_GET.bind_call(_self, iv)
+        DEBUGGER__.m_instance_variables.bind_call(_self).sort.each{|iv|
+          value = DEBUGGER__.m_instance_variable_get.bind_call(_self, iv)
           puts_variable_info iv, value, pat
         }
       end
@@ -614,6 +663,8 @@ module DEBUGGER__
         names[name] = nil
         begin
           value = c.const_get(name)
+        rescue Ractor::IsolationError, Ractor::UnsafeError
+          next
         rescue Exception => e
           value = e
         end
@@ -628,7 +679,7 @@ module DEBUGGER__
         rescue Exception
           # ignore
         else
-          if M_KIND_OF_P.bind_call(_self, Module)
+          if DEBUGGER__.m_kind_of_p.bind_call(_self, Module)
             iter_consts _self, &block
             return
           else
@@ -637,10 +688,10 @@ module DEBUGGER__
         end
       elsif _self = current_frame&.self
         cs = {}
-        if M_KIND_OF_P.bind_call(_self, Module)
+        if DEBUGGER__.m_kind_of_p.bind_call(_self, Module)
           cs[_self] = :self
         else
-          _self = M_CLASS.bind_call(_self)
+          _self = DEBUGGER__.m_class.bind_call(_self)
           cs[_self] = :self unless only_self
         end
 
@@ -667,8 +718,6 @@ module DEBUGGER__
 
     def show_globals pat
       safe_global_variables.sort.each{|name|
-        next if SKIP_GLOBAL_LIST.include? name
-
         value = eval(name.to_s)
         puts_variable_info name, value, pat
       }
@@ -684,7 +733,7 @@ module DEBUGGER__
       end
       mono_info = "#{label} = #{inspected}"
 
-      w = Ractor.current[:DEBUGGER_SESSION].width
+      w = Ractor.current[:DEBUGGER__SESSION].width
 
       if mono_info.length >= w
         maximum_value_width = w - "#{label} = ".length
@@ -722,7 +771,6 @@ module DEBUGGER__
         if editor = (ENV['RUBY_DEBUG_EDITOR'] || ENV['EDITOR'])
           puts "command: #{editor}"
           puts "   path: #{path}"
-          require 'shellwords'
           system(*Shellwords.split(editor), path)
         else
           puts "can not find editor setting: ENV['RUBY_DEBUG_EDITOR'] or ENV['EDITOR']"
@@ -780,12 +828,12 @@ module DEBUGGER__
 
         locals = current_frame&.local_variables
 
-        klass = M_CLASS.bind_call(obj)
+        klass = DEBUGGER__.m_class.bind_call(obj)
         klass = obj if Class == klass || Module == klass
 
-        o.dump("constants", obj.constants) if M_RESPOND_TO_P.bind_call(obj, :constants)
+        o.dump("constants", obj.constants) if DEBUGGER__.m_respond_to_p.bind_call(obj, :constants)
         outline_method(o, klass, obj)
-        o.dump("instance variables", M_INSTANCE_VARIABLES.bind_call(obj))
+        o.dump("instance variables", DEBUGGER__.m_instance_variables.bind_call(obj))
         o.dump("class variables", klass.class_variables)
         o.dump("locals", locals.keys) if locals
       end
@@ -793,7 +841,7 @@ module DEBUGGER__
 
     def outline_method(o, klass, obj)
       begin
-        singleton_class = M_SINGLETON_CLASS.bind_call(obj)
+        singleton_class = DEBUGGER__.m_singleton_class.bind_call(obj)
       rescue TypeError
         singleton_class = nil
       end
@@ -895,7 +943,7 @@ module DEBUGGER__
       # assertions
       raise "@mode is #{@mode}" if !waiting?
 
-      unless Ractor.current[:DEBUGGER_SESSION].active?
+      unless Ractor.current[:DEBUGGER__SESSION].active?
         pp caller
         set_mode :running
         return
@@ -1075,7 +1123,7 @@ module DEBUGGER__
             end
           when :pp
             result = frame_eval(eval_src)
-            puts color_pp(result, Ractor.current[:DEBUGGER_SESSION].width)
+            puts color_pp(result, Ractor.current[:DEBUGGER__SESSION].width)
             if Ractor.current == Ractor.main
               if alloc_path = ObjectSpace.allocation_sourcefile(result)
                 puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"
@@ -1141,7 +1189,7 @@ module DEBUGGER__
             show_frames max_lines, pattern
 
           when :list
-            show_src(update_line: true, **(args.first || {}))
+            show_src(**(args.first || {}))
 
           when :whereami
             show_src ignore_show_line: true
@@ -1220,7 +1268,7 @@ module DEBUGGER__
                 obj_inspect = truncate(obj_inspect, width: width)
               end
 
-              event! :result, :trace_pass, M_OBJECT_ID.bind_call(obj), obj_inspect, opt
+              event! :result, :trace_pass, DEBUGGER__.m_object_id.bind_call(obj), obj_inspect, opt
             rescue => e
               puts e.message
               event! :result, nil
@@ -1268,7 +1316,7 @@ module DEBUGGER__
     rescue SuspendReplay, SystemExit, Interrupt
       raise
     rescue Exception => e
-      dbg "#{self.class}#wait_next_action_ Exception: #{e.message}"
+      dbg "#{self.class}#wait_next_action_ Exception: #{e.class} #{e.message}"
       $stderr.puts e.cause.inspect
       $stderr.puts e.inspect
       $stderr.puts e.backtrace
@@ -1474,7 +1522,7 @@ module DEBUGGER__
       end
 
       def screen_width
-        Ractor.current[:DEBUGGER_SESSION].width
+        Ractor.current[:DEBUGGER__SESSION].width
       rescue Errno::EINVAL # in `winsize': Invalid argument - <STDIN>
         80
       end

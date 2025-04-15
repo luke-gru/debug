@@ -62,8 +62,16 @@ each_iseq_i(VALUE v, void *ptr)
 static VALUE
 each_iseq(VALUE self)
 {
+    VALUE cRactor = rb_const_get(rb_cObject, rb_intern("Ractor"));
+    VALUE is_locked = rb_funcall(cRactor, rb_intern("locked_vm?"), 0);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("lock_vm"), 0);
+    }
     struct iseq_i_data data = {each_iseq_i, NULL};
     rb_objspace_each_objects(iseq_i, &data);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("unlock_vm"), 0);
+    }
     return Qnil;
 }
 
@@ -79,7 +87,15 @@ count_iseq(VALUE self)
 {
     size_t size = 0;
     struct iseq_i_data data = {count_iseq_i, &size};
+    VALUE cRactor = rb_const_get(rb_cObject, rb_intern("Ractor"));
+    VALUE is_locked = rb_funcall(cRactor, rb_intern("locked_vm?"), 0);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("lock_vm"), 0);
+    }
     rb_objspace_each_objects(iseq_i, &data);
+    if (!RTEST(is_locked)) {
+        rb_funcall(cRactor, rb_intern("unlock_vm"), 0);
+    }
     return SIZET2NUM(size);
 }
 
@@ -88,6 +104,7 @@ Init_iseq_collector(void)
 {
 
     RB_EXT_RACTOR_SAFE(true);
+
     VALUE rb_mObjSpace = rb_const_get(rb_cObject, rb_intern("ObjectSpace"));
     rb_define_singleton_method(rb_mObjSpace, "each_iseq", each_iseq, 0);
     rb_define_singleton_method(rb_mObjSpace, "count_iseq", count_iseq, 0);

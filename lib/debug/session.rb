@@ -22,35 +22,46 @@ end
 # my debugging helper
 module Kernel
   def dbg msg, ractor: true
+    return unless ENV["DEBUGGER_DEBUG_RACTORS"] == "1"
     msg = msg.sub(/\ADEBUGGER__::/, '')
+    pre = String.new
     if ractor
-      msg = "#{Ractor.current}: #{msg}"
+      pre << "#{Ractor.current}"
+    end
+    if Thread.current.name =~ /SESSION@server/
+      pre << " " if !pre.empty?
+      pre << "(ServerTh):"
+    elsif !pre.empty?
+      pre << ":"
+    end
+    if !pre.empty?
+      msg = pre + " " + msg
     end
     $stderr.puts msg
   end
 end
 
-module RactorMod
-  def new(*args, &block)
-    r = super
-    Ractor.add r
-    r
-  end
-end
-class Ractor
-  prepend RactorMod
-  @all = []
-  def self.refresh!
-    @all.reject! { |r| r.to_s =~ /terminated/ }
-  end
-  def self.all
-    refresh!
-    @all
-  end
-  def self.add(r)
-    @all << r
-  end
-end
+#module RactorMod
+  #def new(*args, &block)
+    #r = super
+    #Ractor.add r
+    #r
+  #end
+#end
+#class Ractor
+  #prepend RactorMod
+  #@all = []
+  #def self.refresh!
+    #@all.reject! { |r| r.to_s =~ /terminated/ }
+  #end
+  #def self.all
+    #refresh!
+    #@all
+  #end
+  #def self.add(r)
+    #@all << r
+  #end
+#end
 
 # restore RUBYOPT
 if (added_opt = ENV['RUBY_DEBUG_ADDED_RUBYOPT']) &&
@@ -67,6 +78,7 @@ require_relative 'thread_client'
 require_relative 'source_repository'
 require_relative 'breakpoint'
 require_relative 'tracer'
+require_relative 'abbrev_command'
 
 # To prevent loading old lib/debug.rb in Ruby 2.6 to 3.0
 $LOADED_FEATURES << 'debug.rb'
@@ -121,12 +133,27 @@ module DEBUGGER__
   PresetCommands = Struct.new(:commands, :source, :auto_continue)
   SessionCommand = Struct.new(:block, :repeat, :unsafe, :cancel_auto_continue, :postmortem)
 
+  EXITING = false
+  def self.exiting?
+    EXITING
+  end
+
+  def self.without_warnings(&block)
+    old = $VERBOSE
+    $VERBOSE = nil
+    block.call
+  ensure
+    $VERBOSE = old
+  end
+
   class PostmortemError < RuntimeError; end
 
   class Session
     attr_reader :intercepted_sigint_cmd, :process_group, :subsession_id
 
     include Color
+
+    SUBSESSION_RACTOR = nil
 
     def initialize
       @ui = nil
@@ -231,12 +258,14 @@ module DEBUGGER__
           thc.mark_as_management
         end
 
+        # Threads beginning in the current ractor
         @tp_thread_begin = TracePoint.new(:thread_begin) do |tp|
           dbg "TP thread_begin: #{Thread.current}"
           get_thread_client
         end
         @tp_thread_begin.enable
 
+        # Threads ending in the current ractor
         @tp_thread_end = TracePoint.new(:thread_end) do |tp|
           dbg "TP thread_end: #{Thread.current}"
           @th_clients.delete(Thread.current)
@@ -265,6 +294,7 @@ module DEBUGGER__
 
     def deactivate
       dbg "#{self.class}#deactivate for #{Thread.current}"
+      #$stderr.puts caller
       get_thread_client.deactivate
       @thread_stopper.disable
       @tp_load_script.disable
@@ -276,6 +306,7 @@ module DEBUGGER__
       @q_evt.close
       @ui&.deactivate
       @ui = nil
+      dbg "#{self.class}#deactivate done"
     end
 
     def reset_ui ui
@@ -304,35 +335,46 @@ module DEBUGGER__
           process_event evt
         end
       rescue => e
+        dbg "ERROR in #{self.class}#session_server_main: #{e.class}:#{e.message}"
         dbg "ERROR in #{self.class}#session_server_main: #{e.full_message}"
+      rescue SystemExit => e
+        dbg "ERROR in #{self.class}#session_server_main: #{e.class}:#{e.message}"
+        raise e
       ensure
+        dbg "#{self.class}#session_server_main: Deactivating"
         deactivate
+        # TODO: the VM restarts ractors that are blocked
+        exit!(0) if e.is_a?(SystemExit) # TODO: ractors
       end
     end
 
     # sends to tc.q_cmd
     def request_tc(req)
+      dbg "NO TC" unless @tc
       raise "[BUG] no ThreadClient" unless @tc
       dbg "#{self.class}#request_tc: req=#{req.inspect}"
       @tc << req
     end
 
     def request_tc_with_restarted_threads(req)
-      restart_all_threads
+      dbg "#{self.class}##{__method__}: req=#{req.inspect}"
+      restart_all_threads(current_ractor_only: true)
       request_tc(req)
     end
 
     def request_eval type, src
+      dbg "#{self.class}##{__method__}: type=#{type}"
       request_tc_with_restarted_threads [:eval, type, src]
     end
 
+    # called by session_server thread
     def process_event evt
       # variable `@internal_info` is only used for test
       tc, output, ev, @internal_info, *ev_args = evt
 
       output.each{|str| @ui.puts str} if ev != :suspend
 
-      dbg "#{self.class}#process_event: #{ev} #{ev_args.inspect}"
+      dbg "#{self.class}#process_event: #{ev.inspect} #{ev_args.inspect}"
 
       # special event, tc is nil
       # and we don't want to set @tc to the newly created thread's ThreadClient
@@ -345,7 +387,9 @@ module DEBUGGER__
         return
       end
 
-      @tc = tc
+      @tc = tc # ThreadClient of the thread that's doing the debugging, ex: called "debugger"
+      server_th = @tc.thread == @session_server ? " (ServerTh)" : ""
+      dbg("#{self.class}#process_event: @tc=#{@tc.inspect}#{server_th}")
 
       case ev
       when :init
@@ -364,7 +408,7 @@ module DEBUGGER__
         request_tc :continue
 
       when :suspend
-        enter_subsession if ev_args.first != :replay
+        enter_subsession(Ractor.current) if ev_args.first != :replay
         output.each{|str| @ui.puts str} unless @ui.ignore_output_on_suspend?
 
         case ev_args.first
@@ -401,7 +445,7 @@ module DEBUGGER__
             end
           end
 
-          stop_all_threads
+          stop_all_threads(current_ractor_only: true)
         when :method_breakpoint, :watch_breakpoint
           bp = ev_args[1]
           if bp
@@ -417,7 +461,7 @@ module DEBUGGER__
           add_tracer ObjectTracer.new(@ui, obj_id, obj_inspect, **opt)
           stop_all_threads
         else
-          stop_all_threads
+          stop_all_threads(current_ractor_only: true)
         end
 
         wait_command_loop
@@ -445,7 +489,9 @@ module DEBUGGER__
       ThreadClient.current.on_init name if kick
     end
 
+    # get source for iseq
     def source iseq
+      dbg "#{self.class}##{__method__}: #{iseq.inspect}"
       if !Config.config[:no_color]
         @sr.get_colored(iseq)
       else
@@ -487,9 +533,11 @@ module DEBUGGER__
           if @preset_command.auto_continue
             @preset_command = nil
 
+            dbg "#{self.class}##{__method__} leaving subsession (@preset_command.autocontinue)"
             leave_subsession :continue
             return
           else
+            dbg "#{self.class}##{__method__} @preset_command.commands.empty (:retry)"
             @preset_command = nil
             return :retry
           end
@@ -499,12 +547,16 @@ module DEBUGGER__
         end
       else
         @ui.puts "INTERNAL_INFO: #{JSON.generate(@internal_info)}" if ENV['RUBY_DEBUG_TEST_UI'] == 'terminal'
+        dbg "#{self.class}##{__method__} @ui#readline"
         line = @ui.readline prompt
       end
 
       case line
       when String
-        process_command line
+        dbg "#{self.class}##{__method__} processing"
+        ret = process_command line
+        dbg "#{self.class}##{__method__} processed"
+        ret
       when Hash
         process_protocol_request line # defined in server.rb
       else
@@ -566,9 +618,9 @@ module DEBUGGER__
       #   * Similar to `next` command, but only stop later lines or the end of the current frame.
       #   * Similar to gdb's `advance` command.
       # * `u[ntil] <[file:]line>`
-      #   * Run til the program reaches given location or the end of the current frame.
+      #   * Run until the program reaches given location or the end of the current frame.
       # * `u[ntil] <name>`
-      #   * Run til the program invokes a method `<name>`. `<name>` can be a regexp with `/name/`.
+      #   * Run until the program invokes a method `<name>`. `<name>` can be a regexp with `/name/`.
       register_command 'u', 'until',
                        repeat: true,
                        cancel_auto_continue: true,
@@ -841,7 +893,7 @@ module DEBUGGER__
       # * `i[nfo] g or globals or global_variables`
       #   * Show information about global variables
       # * `i[nfo] th or threads`
-      #   * Show all threads (same as `th[read]`).
+      #   * Show all threads in current ractor (same as `th[read]`).
       # * `i[nfo] b or breakpoints or w or watchpoints`
       #   * Show all breakpoints and watchpoints.
       # * `i[nfo] ... /regexp/`
@@ -871,7 +923,6 @@ module DEBUGGER__
             watchs: %w[ watchpoints ],
           }
 
-          require_relative 'abbrev_command'
           info_subcommands_abbrev = AbbrevCommand.new(info_subcommands)
         end
 
@@ -1000,6 +1051,8 @@ module DEBUGGER__
       register_command 'irb' do |arg|
         if @ui.remote?
           @ui.puts "\nIRB is not supported on the remote console."
+        elsif Ractor.current != Ractor.main
+          @ui.puts "\nIRB is not supported on non-main ractors"
         else
           config_set :irb_console, true
         end
@@ -1108,9 +1161,9 @@ module DEBUGGER__
       ### Thread control
 
       # * `th[read]`
-      #   * Show all threads.
+      #   * Show all threads in current ractor.
       # * `th[read] <thnum>`
-      #   * Switch thread specified by `<thnum>`.
+      #   * Switch thread in current ractor specified by `<thnum>`.
       register_command 'th', 'thread', unsafe: false do |arg|
         case arg
         when nil, 'list', 'l'
@@ -1219,6 +1272,7 @@ module DEBUGGER__
         cancel_auto_continue  if cmd.cancel_auto_continue
         @repl_prev_line = nil if !cmd.repeat
 
+        dbg "#{self.class}##{__method__}: #{cmd_name.inspect} #{cmd_arg.inspect}"
         cmd.block.call(cmd_arg)
       else
         @repl_prev_line = nil
@@ -1282,7 +1336,7 @@ module DEBUGGER__
         end
 
         line = "%-34s \# %s" % [kv, desc]
-        if line.size > Ractor.current[:DEBUGGER_SESSION].width
+        if line.size > Ractor.current[:DEBUGGER__SESSION].width
           @ui.puts "\# #{desc}\n#{kv}"
         else
           @ui.puts line
@@ -1408,7 +1462,7 @@ module DEBUGGER__
 
     # breakpoint management
 
-    def iterate_bps
+    def iterate_bps # yields
       deleted_bps = []
       i = 0
       @bps.each{|key, bp|
@@ -1424,8 +1478,13 @@ module DEBUGGER__
     end
 
     def show_bps specific_bp = nil
+      num = 0
       iterate_bps do |key, bp, i|
+        num += 1
         @ui.puts "#%d %s" % [i, bp.to_s] if !specific_bp || bp == specific_bp
+      end
+      if num == 0
+        @ui.puts "no breakpoints"
       end
     end
 
@@ -1483,7 +1542,7 @@ module DEBUGGER__
       end
     end
 
-    BREAK_KEYWORDS = %w(if: do: pre: path:).freeze
+    BREAK_KEYWORDS = Ractor.make_shareable(%w(if: do: pre: path:))
 
     private def parse_break type, arg
       mode = :sig
@@ -1512,14 +1571,16 @@ module DEBUGGER__
 
     def repl_add_breakpoint arg
       expr = parse_break 'break', arg.strip
+      dbg "parsed break"
       cond = expr[:if]
       cmd  = expr[:cmd]
       path = expr[:path]
 
       case expr[:sig]
-      when /\A(\d+)\z/
+      when /\A(\d+)\s*\z/
+        dbg "add line bp"
         add_line_breakpoint @tc.location.path, $1.to_i, cond: cond, command: cmd
-      when /\A(.+)[:\s+](\d+)\z/
+      when /\A(.+)[:\s+](\d+)\s*\z/
         add_line_breakpoint $1, $2.to_i, cond: cond, command: cmd
       when /\A(.+)([\.\#])(.+)\z/
         request_tc [:breakpoint, :method, $1, $2, $3, cond, cmd, path]
@@ -1734,7 +1795,7 @@ module DEBUGGER__
 
     private def thread_stopper
       TracePoint.new(:line) do
-        # run on each thread
+        # run on each other thread in the current ractor
         tc = ThreadClient.current
         next if tc.management?
         next unless tc.running?
@@ -1745,39 +1806,48 @@ module DEBUGGER__
       end
     end
 
-    # TODO: need to stop all threads on all ractors
-    private def stop_all_threads
-      dbg "stop_all_threads: #{running_thread_clients_count}"
-      return if running_thread_clients_count == 0
+    private def stop_all_threads(current_ractor_only: false)
+      if DEBUGGER__.exiting?
+        dbg "#{self.class}##{__method__}: sleeping"
+        sleep
+      end
+      dbg "stop_all_threads: #{running_thread_clients_count} current_ractor_only=#{current_ractor_only}"
+      Ractor.stop_other_ractors if !current_ractor_only
+      return if running_thread_clients_count == 0 && Ractor.count == 1
 
       stopper = @thread_stopper
       stopper.enable unless stopper.enabled?
     end
 
-    private def restart_all_threads
-      dbg "Restarting all threads"
+    private def restart_all_threads(current_ractor_only: false)
+      dbg "Restarting all threads current_ractor_only=#{current_ractor_only}"
+      if !current_ractor_only && Ractor.locked_vm?
+        Ractor.continue_other_ractors
+      end
       stopper = @thread_stopper
       stopper.disable if stopper.enabled?
 
       waiting_thread_clients.each{|tc|
         next if @tc == tc
-        dbg "Sending :continue to tc #{tc}"
+        dbg "#{self.class}##{__method__}: Sending :continue to tc #{tc}"
         tc << :continue
       }
     end
 
-    private def enter_subsession
+    private def enter_subsession(ractor = nil)
       @subsession_id += 1
       if !@subsession_stack.empty?
+        dbg "Entering subsession (nested: #{@subsession_stack.size})"
         DEBUGGER__.debug{ "Enter subsession (nested #{@subsession_stack.size})" }
+        #Session.const_set(:SUBSESSION_RACTOR, ractor)
       else
         dbg "Entering subsession, stopping threads"
         DEBUGGER__.debug{ "Enter subsession" }
-        stop_all_threads
+        stop_all_threads(current_ractor_only: false)
         @process_group.lock
       end
 
-      @subsession_stack << true
+      @subsession_stack << ractor
     end
 
     private def leave_subsession type
@@ -1785,17 +1855,20 @@ module DEBUGGER__
       @subsession_stack.pop
 
       if @subsession_stack.empty?
+        #Session.const_set(:SUBSESSION_RACTOR, nil)
         dbg "Leaving subsession, restarting all threads"
         DEBUGGER__.debug{ "Leave subsession" }
         @process_group.unlock
         restart_all_threads
       else
+        dbg "Leaving subsession (nested: #{@subsession_stack.size})"
         DEBUGGER__.debug{ "Leave subsession (nested #{@subsession_stack.size})" }
       end
 
       request_tc type if type
       @tc = nil
     rescue Exception => e
+      dbg "#{self.class}##{__method__}: #{e.inspect}"
       $stderr.puts PP.pp([e, e.backtrace], ''.dup)
       raise
     end
@@ -1900,27 +1973,38 @@ module DEBUGGER__
     end
 
     def self.create_method_added_tracker mod, method_added_id, method_accessor = :method
-      m = mod.__send__(method_accessor, method_added_id)
-      METHOD_ADDED_TRACKERS[m] = TracePoint.new(:call) do |tp|
-        Ractor.current[:DEBUGGER_SESSION].method_added tp
+      trackers = METHOD_ADDED_TRACKERS.dup
+      (trackers[mod] ||= []) << [method_accessor, method_added_id, Ractor.current.instance_eval do
+        proc do |tp|
+          Ractor.current[:DEBUGGER__SESSION].method_added tp
+        end
+      end]
+      Ractor.make_shareable(trackers)
+      DEBUGGER__.without_warnings do
+        DEBUGGER__.const_set(:METHOD_ADDED_TRACKERS, trackers)
       end
     end
 
     def self.activate_method_added_trackers
-      METHOD_ADDED_TRACKERS.each do |m, tp|
-        tp.enable(target: m) unless tp.enabled?
+      METHOD_ADDED_TRACKERS.each do |mod, (accessor, id, prok)|
+        Ractor.current[:DEBUGGER__METHOD_ADDED_TRACKERS] ||= {}
+        tp = Ractor.current[:DEBUGGER__METHOD_ADDED_TRACKERS][[mod, accessor, id]] ||= Tracepoint.new(:call) do |tp|
+          prok.call(tp)
+        end
+        method = mod.__send__(accessor, id)
+        tp.enable(target: method) unless tp.enabled?
       rescue ArgumentError
         DEBUGGER__.warn "Methods defined under #{m.owner} can not track by the debugger."
       end
     end
 
     def self.deactivate_method_added_trackers
-      METHOD_ADDED_TRACKERS.each do |m, tp|
+      (Ractor.current[:DEBUGGER__METHOD_ADDED_TRACKERS] ||= {}).each do |(mod, accessor, id), tp|
         tp.disable if tp.enabled?
       end
     end
 
-    METHOD_ADDED_TRACKERS = Hash.new
+    METHOD_ADDED_TRACKERS = Ractor.make_shareable(Hash.new)
     create_method_added_tracker Module, :method_added, :instance_method
     create_method_added_tracker BasicObject, :singleton_method_added, :instance_method
 
@@ -2244,11 +2328,11 @@ module DEBUGGER__
   # manual configuration methods
 
   def self.add_line_breakpoint file, line, **kw
-    Ractor.current[:DEBUGGER_SESSION].add_line_breakpoint file, line, **kw
+    Ractor.current[:DEBUGGER__SESSION].add_line_breakpoint file, line, **kw
   end
 
   def self.add_catch_breakpoint pat
-    Ractor.current[:DEBUGGER_SESSION].add_catch_breakpoint pat
+    Ractor.current[:DEBUGGER__SESSION].add_catch_breakpoint pat
   end
 
   # String for requiring location
@@ -2278,7 +2362,7 @@ module DEBUGGER__
     if Config.config[:open]
       open nonstop: nonstop, **kw
     else
-      unless Ractor.current[:DEBUGGER_SESSION]
+      unless Ractor.current[:DEBUGGER__SESSION]
         require_relative 'local'
         initialize_session { UI_LocalConsole.new }
         setup_initial_suspend unless nonstop
@@ -2301,7 +2385,7 @@ module DEBUGGER__
     Config.config.set_config(**kw)
     require_relative 'server'
 
-    session = Ractor.current[:DEBUGGER_SESSION]
+    session = Ractor.current[:DEBUGGER__SESSION]
     if session
       session.reset_ui UI_TcpServer.new(host: host, port: port)
     else
@@ -2315,7 +2399,7 @@ module DEBUGGER__
     Config.config.set_config(**kw)
     require_relative 'server'
 
-    session = Ractor.current[:DEBUGGER_SESSION]
+    session = Ractor.current[:DEBUGGER__SESSION]
     if session
       session.reset_ui UI_UnixDomainServer.new(sock_dir: sock_dir, sock_path: sock_path)
     else
@@ -2353,7 +2437,11 @@ module DEBUGGER__
     def initialize_session(&init_ui)
       dbg "Session start"
       DEBUGGER__.info "Session start (pid: #{Process.pid})"
-      session = Ractor.current[:DEBUGGER_SESSION] = Session.new
+      session = Ractor.current[:DEBUGGER__SESSION] = Session.new
+      if Ractor.current != Ractor.main
+        Session.create_method_added_tracker Module, :method_added, :instance_method
+        Session.create_method_added_tracker BasicObject, :singleton_method_added, :instance_method
+      end
       session.activate init_ui.call
       load_rc
     end
@@ -2384,7 +2472,7 @@ module DEBUGGER__
         if path.end_with?('.rb')
           load path
         else
-          Ractor.current[:DEBUGGER_SESSION].add_preset_commands path, File.readlines(path)
+          Ractor.current[:DEBUGGER__SESSION].add_preset_commands path, File.readlines(path)
         end
       elsif !rc
         warn "Not found: #{path}"
@@ -2394,7 +2482,7 @@ module DEBUGGER__
     # given debug commands
     if Config.config[:commands]
       cmds = Config.config[:commands].split(';;')
-      Ractor.current[:DEBUGGER_SESSION].add_preset_commands "commands", cmds, kick: false, continue: false
+      Ractor.current[:DEBUGGER__SESSION].add_preset_commands "commands", cmds, kick: false, continue: false
     end
   end
 
@@ -2436,14 +2524,16 @@ module DEBUGGER__
       obj.inspect
     end
   rescue NoMethodError => e
-    klass, oid = M_CLASS.bind_call(obj), M_OBJECT_ID.bind_call(obj)
+    dbg "#{self.class}##{__method__}: Error: #{e.inspect}"
+    klass, oid = m_class.bind_call(obj), m_object_id.bind_call(obj)
     if obj == (r = e.receiver)
       "<\##{klass.name}#{oid} does not have \#inspect>"
     else
-      rklass, roid = M_CLASS.bind_call(r), M_OBJECT_ID.bind_call(r)
+      rklass, roid = m_class.bind_call(r), m_object_id.bind_call(r)
       "<\##{klass.name}:#{roid} contains <\##{rklass}:#{roid} and it does not have #inspect>"
     end
   rescue Exception => e
+    dbg "#{self.class}##{__method__}: Error: #{e.inspect}"
     "<#inspect raises #{e.inspect}>"
   end
 
@@ -2472,7 +2562,7 @@ module DEBUGGER__
       logfile = $stderr
       return if logfile.closed?
 
-      session = Ractor.current[:DEBUGGER_SESSION]
+      session = Ractor.current[:DEBUGGER__SESSION]
       if session
         pi = session.process_info
         process_info = pi ? "[#{pi}]" : nil
@@ -2490,7 +2580,7 @@ module DEBUGGER__
   end
 
   def self.step_in &b
-    session = Ractor.current[:DEBUGGER_SESSION]
+    session = Ractor.current[:DEBUGGER__SESSION]
     if session&.active?
       session.add_iseq_breakpoint RubyVM::InstructionSequence.of(b), oneshot: true
     end
@@ -2515,7 +2605,7 @@ module DEBUGGER__
   module ForkInterceptor
     if Process.respond_to? :_fork
       def _fork
-        session = Ractor.current[:DEBUGGER_SESSION]
+        session = Ractor.current[:DEBUGGER__SESSION]
         return super unless session && session.active?
 
         parent_hook, child_hook = __fork_setup_for_debugger
@@ -2532,7 +2622,7 @@ module DEBUGGER__
       end
     else
       def fork(&given_block)
-        session = Ractor.current[:DEBUGGER_SESSION]
+        session = Ractor.current[:DEBUGGER__SESSION]
         return super unless session && session.active?
         parent_hook, child_hook = __fork_setup_for_debugger
 
@@ -2559,7 +2649,7 @@ module DEBUGGER__
 
     module DaemonInterceptor
       def daemon(*args)
-        session = Ractor.current[:DEBUGGER_SESSION]
+        session = Ractor.current[:DEBUGGER__SESSION]
         return super unless session && session.active?
 
         _, child_hook = __fork_setup_for_debugger(:child)
@@ -2582,7 +2672,7 @@ module DEBUGGER__
       end
 
       parent_pid = Process.pid
-      session = Ractor.current[:DEBUGGER_SESSION]
+      session = Ractor.current[:DEBUGGER__SESSION]
 
       # before fork
       case fork_mode
@@ -2638,7 +2728,7 @@ module DEBUGGER__
 
       case sym
       when :INT, :SIGINT
-        session = Ractor.current[:DEBUGGER_SESSION]
+        session = Ractor.current[:DEBUGGER__SESSION]
         if session && session.active? && session.intercept_trap_sigint?
           return session.save_int_trap(command.empty? ? command_proc : command.first)
         end
@@ -2702,11 +2792,11 @@ end
 
 module Kernel
   def debugger pre: nil, do: nil, up_level: 0
-    session = Ractor.current[:DEBUGGER_SESSION]
+    session = Ractor.current[:DEBUGGER__SESSION]
     dbg "Calling Kernel#debugger, session exists: #{!!session}"
     if !session || !session.active?
       ::DEBUGGER__.start(nonstop: true)
-      session = Ractor.current[:DEBUGGER_SESSION]
+      session = Ractor.current[:DEBUGGER__SESSION]
     end
 
     if pre || (do_expr = binding.local_variable_get(:do))
