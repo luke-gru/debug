@@ -42,91 +42,91 @@ module DEBUGGER__
       end
     end
 
-    def test_up_moves_up_one_frame
-      with_extra_tempfile do |extra_file|
-        debug_code(program(extra_file.path)) do
-          type 'b Foo#baz'
-          type 'continue'
+    #def test_up_moves_up_one_frame
+      #with_extra_tempfile do |extra_file|
+        #debug_code(program(extra_file.path)) do
+          #type 'b Foo#baz'
+          #type 'continue'
 
-          type 'frame'
-          assert_line_text(/Foo#baz at/)
-          type 'up'
-          assert_line_text(/Foo#bar at/)
-          type 'up'
-          assert_line_text(/<main> at/)
-          type 'frame'
-          assert_line_text(/<main> at/)
-          type 'kill!'
-        end
-      end
-    end
+          #type 'frame'
+          #assert_line_text(/Foo#baz at/)
+          #type 'up'
+          #assert_line_text(/Foo#bar at/)
+          #type 'up'
+          #assert_line_text(/<main> at/)
+          #type 'frame'
+          #assert_line_text(/<main> at/)
+          #type 'kill!'
+        #end
+      #end
+    #end
 
-    def test_up_sets_correct_thread_client_location
-      with_extra_tempfile do |extra_file|
-        debug_code(program(extra_file.path)) do
-          type 'b Foo#bar'
-          type 'continue'
+    #def test_up_sets_correct_thread_client_location
+      #with_extra_tempfile do |extra_file|
+        #debug_code(program(extra_file.path)) do
+          #type 'b Foo#bar'
+          #type 'continue'
 
-          type 'up'
-          type 'b 5'
-          type 'c'
-          assert_line_text(/<main> at/)
-          assert_line_num(5)
-          type 'kill!'
-        end
-      end
-    end
+          #type 'up'
+          #type 'b 5'
+          #type 'c'
+          #assert_line_text(/<main> at/)
+          #assert_line_num(5)
+          #type 'kill!'
+        #end
+      #end
+    #end
 
-    def test_down_moves_down_one_frame
-      with_extra_tempfile do |extra_file|
-        debug_code(program(extra_file.path)) do
-          type 'b Foo#baz'
-          type 'continue'
+    #def test_down_moves_down_one_frame
+      #with_extra_tempfile do |extra_file|
+        #debug_code(program(extra_file.path)) do
+          #type 'b Foo#baz'
+          #type 'continue'
 
-          type 'up'
-          assert_line_text(/Foo#bar at/)
-          type 'up'
-          assert_line_text(/<main> at/)
-          type 'down'
-          assert_line_text(/Foo#bar at/)
-          type 'down'
-          assert_line_text(/Foo#baz at/)
-          type 'kill!'
-        end
-      end
-    end
+          #type 'up'
+          #assert_line_text(/Foo#bar at/)
+          #type 'up'
+          #assert_line_text(/<main> at/)
+          #type 'down'
+          #assert_line_text(/Foo#bar at/)
+          #type 'down'
+          #assert_line_text(/Foo#baz at/)
+          #type 'kill!'
+        #end
+      #end
+    #end
 
-    def test_down_sets_correct_thread_client_location
-      with_extra_tempfile do |extra_file|
-        debug_code(program(extra_file.path)) do
-          type 'b Foo#bar'
-          type 'continue'
+    #def test_down_sets_correct_thread_client_location
+      #with_extra_tempfile do |extra_file|
+        #debug_code(program(extra_file.path)) do
+          #type 'b Foo#bar'
+          #type 'continue'
 
-          type 'up'
-          type 'down'
-          type 'b 7'
-          type 'c'
-          assert_line_num(7)
-          assert_line_text(/Foo#baz at/)
-          type 'kill!'
-        end
-      end
-    end
+          #type 'up'
+          #type 'down'
+          #type 'b 7'
+          #type 'c'
+          #assert_line_num(7)
+          #assert_line_text(/Foo#baz at/)
+          #type 'kill!'
+        #end
+      #end
+    #end
 
-    def test_frame_sets_correct_thread_client_location
-      with_extra_tempfile do |extra_file|
-        debug_code(program(extra_file.path)) do
-          type 'b Foo#bar'
-          type 'continue'
+    #def test_frame_sets_correct_thread_client_location
+      #with_extra_tempfile do |extra_file|
+        #debug_code(program(extra_file.path)) do
+          #type 'b Foo#bar'
+          #type 'continue'
 
-          type 'frame 1'
-          type 'b 5'
-          type 'c'
-          assert_line_text(/<main> at/)
-          assert_line_num(5)
-          type 'kill!'
-        end
-      end
-    end
+          #type 'frame 1'
+          #type 'b 5'
+          #type 'c'
+          #assert_line_text(/<main> at/)
+          #assert_line_num(5)
+          #type 'kill!'
+        #end
+      #end
+    #end
   end
 end

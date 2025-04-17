@@ -5,7 +5,7 @@ require_relative '../support/console_test_case'
 module DEBUGGER__
   
   class RactorDebugger < ConsoleTestCase
-    def program
+    def program_debugger_in_ractor
       <<~RUBY
         1| r = Ractor.new do
         2|   a = 10
@@ -20,7 +20,7 @@ module DEBUGGER__
     end
     
     def test_debugger_works_in_ractor
-      debug_code(program) do
+      debug_code(program_debugger_in_ractor) do
         type 'c'
         assert_line_num 3
         assert_line_text([
@@ -49,6 +49,7 @@ module DEBUGGER__
           /=>   9\| debugger/,
           /=>\#0\t<main> at .*/
         ])
+        type 'c'
       end
     end
   end

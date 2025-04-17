@@ -56,7 +56,7 @@ module DEBUGGER__
       name = SecureRandom.hex(5) + additional_words.join
 
       t = Tempfile.create([name, '.rb']).tap do |f|
-        f.write(extra_file)
+        f.write(extra_file) # extra_file must be defined in the test class
         f.close
       end
       yield t

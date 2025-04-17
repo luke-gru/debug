@@ -54,7 +54,7 @@ module DEBUGGER__
   class CustomPostmortemTest < ConsoleTestCase
     def program
       <<~RUBY
-        1| DEBUGGER__::CONFIG[:postmortem] = true
+        1| DEBUGGER__::Config.config[:postmortem] = true
         2| def foo y = __LINE__
         3|   bar
         4| end
@@ -64,11 +64,11 @@ module DEBUGGER__
         8| begin
         9|   foo
        10| rescue => e
-       11|   DEBUGGER__::SESSION.enter_postmortem_session e
+       11|   DEBUGGER__.session.enter_postmortem_session e
        12| end
        13| binding.b
        14| v = :ok1
-       15| DEBUGGER__::CONFIG[:postmortem] = false
+       15| DEBUGGER__::Config.config[:postmortem] = false
       RUBY
     end
 

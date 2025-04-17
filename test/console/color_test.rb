@@ -44,7 +44,7 @@ module DEBUGGER__
     end
 
     def test_colored_inspect_does_not_color_objects_if_do_not_use_colorize
-      CONFIG[:no_color] = true
+      Config.config[:no_color] = true
       stub_width_method
 
       dummy_class = Struct.new(:foo) do
@@ -60,7 +60,7 @@ module DEBUGGER__
         assert_equal(expected, colored_inspect(obj))
       end
     ensure
-      CONFIG[:no_color] = nil
+      Config.config[:no_color] = nil
       remove_const_SESSION
     end
 
@@ -79,7 +79,7 @@ module DEBUGGER__
     end
 
     def test_colorize_does_not_color_string_if_do_not_use_colorize
-      CONFIG[:no_color] = true
+      Config.config[:no_color] = true
 
       [
         [:YELLOW, :BOLD, :REVERSE],
@@ -91,7 +91,7 @@ module DEBUGGER__
         assert_equal('foo', colorize('foo', color))
       end
     ensure
-      CONFIG[:no_color] = nil
+      Config.config[:no_color] = nil
     end
 
     SESSION_class = Struct.new('SESSION', :a)
@@ -99,14 +99,12 @@ module DEBUGGER__
     private
 
     def stub_width_method
-      DEBUGGER__.const_set('SESSION', SESSION_class)
-      stub(::DEBUGGER__::SESSION).width { IO.console_size[1] }
+      session_obj = Ractor.current[:DEBUGGER__SESSION] = SESSION_class.new nil
+      stub(session_obj).width { IO.console_size[1] }
     end
 
     def remove_const_SESSION
-      DEBUGGER__.public_class_method(:remove_const)
-      DEBUGGER__.remove_const(:SESSION)
-      DEBUGGER__.private_class_method(:remove_const)
+      Ractor.current[:DEBUGGER__SESSION] = nil
     end
 
     def enable_colorable

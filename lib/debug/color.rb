@@ -52,14 +52,14 @@ module DEBUGGER__
           if !Config.config[:no_color] && Ractor.current == Ractor.main # TODO: ractors
             IRB::ColorPrinter.pp(obj, "".dup, width)
           else
-            obj.pretty_inspect
+            PP.pp(obj, "".dup, width)
           end
         end
       end
     else
       def color_pp obj, width
         with_inspection_error_guard do
-          obj.pretty_inspect
+          PP.pp(obj, "".dup, width)
         end
       end
     end
@@ -69,7 +69,7 @@ module DEBUGGER__
         if !no_color
           color_pp obj, width
         else
-          obj.pretty_inspect
+          PP.pp(obj, "".dup, width)
         end
       end
     end

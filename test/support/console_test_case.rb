@@ -295,6 +295,7 @@ module DEBUGGER__
       end
     end
 
+    # @return Queue
     def dup_scenario
       @scenario.each_with_object(Queue.new){ |e, q| q << e }
     end

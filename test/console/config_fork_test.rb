@@ -166,7 +166,7 @@ module DEBUGGER__
   class NestedForkTest < ConsoleTestCase
     def program
       <<~RUBY
-        1| DEBUGGER__::CONFIG[:fork_mode] = :parent
+        1| DEBUGGER__::Config.config[:fork_mode] = :parent
         2| pid1 = fork do
         3|   puts 'parent forked.'
         4|   pid2 = fork do

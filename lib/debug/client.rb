@@ -102,7 +102,7 @@ module DEBUGGER__
         if verbose
           socks = socks.map{|sock_path|
             Socket.unix(sock_path){|sock|
-              sock.puts "info cookie: #{CONFIG[:cookie] || '-'}"
+              sock.puts "info cookie: #{Config.config[:cookie] || '-'}"
               pid = sock.gets.chomp
               _dbg = sock.gets.chomp
               _unm = sock.gets.chomp
@@ -140,8 +140,8 @@ module DEBUGGER__
 
       send "version: #{VERSION} " +
            "width: #{@width} " +
-           "cookie: #{CONFIG[:cookie] || '-'} " +
-           "nonstop: #{CONFIG[:nonstop] ? 'true' : 'false'}"
+           "cookie: #{Config.config[:cookie] || '-'} " +
+           "nonstop: #{Config.config[:nonstop] ? 'true' : 'false'}"
     end
 
     def deactivate
@@ -194,7 +194,7 @@ module DEBUGGER__
     end
 
     def connect
-      pre_commands = (CONFIG[:commands] || '').split(';;')
+      pre_commands = (Config.config[:commands] || '').split(';;')
 
       trap(:SIGINT){
         send "pause"

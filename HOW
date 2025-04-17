@@ -32,6 +32,7 @@ c,n,p from non-main ractor to main ractor
 c in multiple ractors
 "list" in multiple ractors
 "p" in multiple ractors
+"pp" in multiple ractors
 "next" works for multiple ractors
 "q", "q!"
 "kill", "kill!"
@@ -45,6 +46,7 @@ What's Not Working
 * colors in the UI, and reline support
 * breakpoints for all ractors, right now just sets it for current ractor
 * Ctrl-C
+* break on unknown constant name
 
 What's Not Tested
 -----------------
@@ -65,10 +67,19 @@ Generating Tests
 ----------------
 bin/gentest target.rb (see CONTRIBUTING.md)
 
+Failing Tests
+-------------
+console/break_test.rb
+console/control_flow_commands_test.rb
+console/frame_control_test.rb
+
+stopped checking at: frame_control_test.rb
+
 Bugs
 ----
 * Sometimes doesn't show anything and requires to press enter to get back to
   prompt
+* When ractors are stopped, any 'require' call fails assertion due to using non-reentrant VM_LOCK
 
 TODO
 ----
@@ -77,7 +88,8 @@ TODO
 
 Working On
 ----------
-Getting tests to work
+* break on unknown constant name (b Foo#baz)
+* Getting tests to work
 
 Source Code Overview
 --------------------

@@ -22,7 +22,7 @@ end
 # my debugging helper
 module Kernel
   def dbg msg, ractor: true
-    return unless ENV["DEBUGGER_DEBUG_RACTORS"] == "1"
+    return unless ENV["RUBY_DEBUG_DEBUG_RACTORS"] == "1"
     msg = msg.sub(/\ADEBUGGER__::/, '')
     pre = String.new
     if ractor
@@ -144,6 +144,10 @@ module DEBUGGER__
     block.call
   ensure
     $VERBOSE = old
+  end
+
+  def self.session
+    Ractor.current[:DEBUGGER__SESSION]
   end
 
   class PostmortemError < RuntimeError; end
@@ -1935,6 +1939,7 @@ module DEBUGGER__
 
       if var_name = b.local_variables.first
         mid = b.local_variable_get(var_name)
+        dbg "#{self.class}#method_added var_name: #{var_name}, mid: #{mid}"
         resolved = true
 
         @bps.each{|k, bp|

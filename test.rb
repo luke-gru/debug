@@ -1,5 +1,21 @@
-$:.unshift File.join(__dir__, "lib")
-require 'debug'
+#$:.unshift File.join(__dir__, "lib")
+#require 'debug'
+
+class Foo
+  def bar
+    baz
+  end
+  def baz
+    10
+  end
+end
+
+debugger
+Foo.new.bar
+
+p 1
+p 2
+p 3
 
 #r2 = Ractor.new do
   #Ractor.yield nil
@@ -13,47 +29,47 @@ require 'debug'
 #end
 
 #r2.take
-def hi
-  $stderr.puts "hi"
-end
+#def hi
+  #$stderr.puts "hi"
+#end
 
-CONSTANT = Object.new
-CONSTANT2 = 10
-$global = 10
+#CONSTANT = Object.new
+#CONSTANT2 = 10
+#$global = 10
 
-b = 1
-r = Ractor.new do
-  CONSTANT3 = 20
-  $stderr.puts "in ractor 1"
-  class MyClass
-    def initialize(a)
-      @a = a
-    end
+#b = 1
+#r = Ractor.new do
+  #CONSTANT3 = 20
+  #$stderr.puts "in ractor 1"
+  #class MyClass
+    #def initialize(a)
+      #@a = a
+    #end
 
-    def wow
-      debugger
-    end
-  end
-  my_obj = MyClass.new(10)
-  my_obj.wow
-  debugger
-  a = 3
-  c = 4
-  d = 5
-  hi
-  e = 6
-end
+    #def wow
+      #debugger
+    #end
+  #end
+  #my_obj = MyClass.new(10)
+  #my_obj.wow
+  #debugger
+  #a = 3
+  #c = 4
+  #d = 5
+  #hi
+  #e = 6
+#end
 
-r3 = Ractor.new do
-  $stderr.puts "in ractor 3"
-  a = 16
-  debugger
-  nil
-end
+#r3 = Ractor.new do
+  #$stderr.puts "in ractor 3"
+  #a = 16
+  #debugger
+  #nil
+#end
 
-r.take
-k = 9
-debugger
+#r.take
+#k = 9
+#debugger
 
 # This ractor needs to stop when it hits the 'debugger' in the other ractor
 #r2 = Ractor.new do

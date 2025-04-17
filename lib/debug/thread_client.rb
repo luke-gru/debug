@@ -961,7 +961,6 @@ module DEBUGGER__
             raise
           end
           dbg "#{self.class}#wait_next_action_ got cmd: #{cmds.inspect}"
-          # pp [self, cmds: cmds]
 
           break unless cmds
         ensure
@@ -1113,9 +1112,7 @@ module DEBUGGER__
           case eval_type
           when :p
             result = frame_eval(eval_src)
-            dbg "eval result from p: #{result.inspect}"
-            puts "=> " + result.to_s
-            #puts "=> " + color_pp(result, 2 ** 30)
+            puts "=> " + color_pp(result, 2 ** 30)
             if Ractor.current == Ractor.main
               if alloc_path = ObjectSpace.allocation_sourcefile(result)
                 puts "allocated at #{alloc_path}:#{ObjectSpace.allocation_sourceline(result)}"

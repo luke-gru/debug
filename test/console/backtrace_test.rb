@@ -142,7 +142,7 @@ module DEBUGGER__
         type 'bt'
         assert_line_text(/Foo#bar/)
         assert_line_text(/~\/foo_\d+.rb/)
-        type "eval DEBUGGER__::CONFIG[:skip_path] = '#{foo_path}'"
+        type "eval DEBUGGER__::Config.config[:skip_path] = '#{foo_path}'"
         type 'bt'
         assert_no_line_text(/Foo#bar/) # ~/foo....rb should match foo.rb's absolute path and be skipped
         assert_no_line_text(/~\/foo\.rb/)
